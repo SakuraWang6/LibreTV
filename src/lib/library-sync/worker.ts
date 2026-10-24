@@ -5,7 +5,15 @@ import { boundedBytes, remoteRequest } from './remote';
 import { progressVersion, refreshCatalog, synchronizeProgress, syncPoster } from './service';
 import { allTasks, atomicJson, mappingFile, readJson, syncConfig, syncRoot, taskFile, withLock, type CacheTask, type Mapping, type SyncConfig } from './storage';
 
-const CHUNK = 256 * 1024;
+const MIN_CHUNK = 256 * 1024;
+const MAX_CHUNK = 4 * 1024 * 1024;
+const TARGET_CHUNK_MS = 4_000;
+
+function nextChunkSize(current: number, transferred: number, elapsed: number): number {
+  const estimated = Math.floor(transferred * TARGET_CHUNK_MS / Math.max(1, elapsed) / 1024) * 1024;
+  // A cached or bursty first response cannot jump straight to a large request.
+  return Math.max(MIN_CHUNK, Math.min(MAX_CHUNK, current * 2, estimated));
+}
 
 async function changeTask(root: string, id: string, change: (task: CacheTask) => void, signal?: AbortSignal): Promise<CacheTask> {
   return withLock(root, `task-${id}`, async () => {
@@ -31,21 +39,37 @@ export async function processCacheTask(config: SyncConfig, id: string, signal?: 
   // library commit resumes the same ID, so it cannot publish a duplicate film.
   const upload = await createUpload({ metadata: task.item, format: task.item.format }, task.uploadId);
   let offset = upload.offset;
+  let chunkSize = MIN_CHUNK;
   let progressCheckedAt = Date.now();
   if (offset > task.item.bytes) throw new Error('云端文件大小发生变化，请重新提交缓存任务');
   await requireSpace(config, task.item.bytes - offset);
   while (offset < task.item.bytes) {
     signal?.throwIfAborted();
-    const end = Math.min(offset + CHUNK, task.item.bytes) - 1;
-    const response = await remoteRequest(config, `/api/library/${task.itemId}/media`, { headers: { Range: `bytes=${offset}-${end}` } }, signal);
-    if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${offset}-${end}/${task.item.bytes}`) {
-      await response.body?.cancel(); throw new Error('云端未返回正确的续传片段，请检查服务器版本');
+    const end = Math.min(offset + chunkSize, task.item.bytes) - 1;
+    const requestedSize = end - offset + 1;
+    const startedAt = performance.now();
+    let bytes: Uint8Array;
+    try {
+      const response = await remoteRequest(config, `/api/library/${task.itemId}/media`, { headers: { Range: `bytes=${offset}-${end}` } }, signal);
+      if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${offset}-${end}/${task.item.bytes}`) {
+        await response.body?.cancel(); throw new Error('云端未返回正确的续传片段，请检查服务器版本');
+      }
+      bytes = await boundedBytes(response, requestedSize);
+      if (bytes.byteLength !== requestedSize) throw new Error('云端返回的视频片段不完整，请重试');
+    } catch (error) {
+      // SIGTERM must win even when its reason happens to be a TimeoutError.
+      signal?.throwIfAborted();
+      if ((error as { name?: string } | null)?.name === 'TimeoutError' && requestedSize > MIN_CHUNK) {
+        chunkSize = Math.max(MIN_CHUNK, Math.floor(requestedSize / 2));
+        continue; // Nothing was appended: retry this exact durable offset.
+      }
+      throw error;
     }
-    const bytes = await boundedBytes(response, end - offset + 1);
-    if (bytes.byteLength !== end - offset + 1) throw new Error('云端返回的视频片段不完整，请重试');
+    const elapsed = performance.now() - startedAt;
     signal?.throwIfAborted();
     const result = await appendUpload(task.uploadId, offset, new Request('http://sync-worker.invalid/', { method: 'PUT', body: new Uint8Array(bytes) }));
     offset = result.offset;
+    chunkSize = nextChunkSize(chunkSize, bytes.byteLength, elapsed);
     await changeTask(root, id, (entry) => { entry.progress = Math.min(99, Math.round(offset / task!.item.bytes * 100)); }, signal);
     if (Date.now() - progressCheckedAt >= 15_000) {
       const latest = await refreshCatalog(config, signal);

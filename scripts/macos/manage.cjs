@@ -7,6 +7,7 @@ const os = require('node:os');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { syncWorkerEnvironment } = require('../library-sync-environment.cjs');
 
 const root = path.resolve(__dirname, '../..');
 const manager = __filename;
@@ -80,6 +81,7 @@ async function waitForHealthy() {
 function prerequisites() {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < 18 || (major === 18 && minor < 18)) throw new Error('需要 Node.js 18.18 或更新版本。');
+  if (process.env.LIBRARY_SERVER_URL) syncWorkerEnvironment(process.env);
   if (!process.env.PASSWORD || process.env.PASSWORD === 'replace-with-a-private-password') {
     throw new Error('请先在 .env.macos.local 中设置自己的 PASSWORD。');
   }
@@ -177,7 +179,9 @@ async function run() {
     // The login service owns every child. A failed worker restarts the group,
     // keeping a healthy web page from hiding a stopped background queue.
     await Promise.all(commands.map((args) => new Promise((resolve) => {
-      const child = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_ENV: 'production' } });
+      const environment = { ...process.env, NODE_ENV: 'production' };
+      const env = args[0] === path.join(root, 'scripts/library-sync-worker.cjs') ? syncWorkerEnvironment(environment) : environment;
+      const child = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env });
       children.push(child);
       child.once('error', (error) => {
         console.error(`[LibreTV] 后台进程无法启动：${error.message}`);

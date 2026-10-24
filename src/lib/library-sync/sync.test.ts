@@ -22,6 +22,10 @@ let requestedOffsets: number[];
 let remoteVersion: number;
 let failOffset: number | undefined;
 let raceProgress: boolean;
+type MediaRange = { start: number; end: number };
+let requestedRanges: MediaRange[];
+let rangeResponse: ((range: MediaRange, options: RequestInit) => Response | undefined) | undefined;
+const MIN_CHUNK = 256 * 1024;
 
 function advanceRemote(position: number): void {
   remote.position = position;
@@ -37,6 +41,7 @@ beforeEach(async () => {
   vi.stubEnv('PUBLIC_ORIGIN', '');
   content = Buffer.from('0123456789abcdef');
   remoteVersion = 0; offline = false; requestedOffsets = []; failOffset = undefined; raceProgress = false;
+  requestedRanges = []; rangeResponse = undefined;
   remote = {
     id: ID, groupId: 'remote-group', title: '云端电影', kind: 'movie', year: '2026', bytes: content.length, format: 'MP4',
     createdAt: '2026-01-01T00:00:00.000Z', mediaUrl: `/api/library/${ID}/media`, posterUrl: `/api/library/${ID}/poster`, position: 40, duration: 1800,
@@ -58,7 +63,10 @@ beforeEach(async () => {
       if (!range) throw new Error('Expected bounded range request');
       const start = Number(range[1]); const end = Number(range[2]);
       requestedOffsets.push(start);
+      requestedRanges.push({ start, end });
       if (failOffset === start) { failOffset = undefined; throw new Error('Connection interrupted'); }
+      const replacement = rangeResponse?.({ start, end }, options);
+      if (replacement) return replacement;
       return new Response(new Uint8Array(content.subarray(start, end + 1)), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${content.length}`, 'Content-Length': String(end - start + 1) } });
     }
     if (url.pathname === `/api/library/${ID}` && options.method === 'PATCH') {
@@ -84,6 +92,13 @@ async function cached(): Promise<string> {
   await enqueueCache({ itemId: ID });
   await processCacheTask(config, ID);
   return (await getSyncStatus()).catalog[0].cachedLocalId!;
+}
+
+async function expectExactCachedVideo(): Promise<void> {
+  const items = (await listLibrary()).items;
+  expect(items).toHaveLength(1);
+  const response = await mediaResponse(items[0].id, new Request('http://local/media'));
+  expect(Buffer.from(await response.arrayBuffer()).equals(content)).toBe(true);
 }
 
 describe('cloud library cache and progress synchronization', () => {
@@ -135,6 +150,130 @@ describe('cloud library cache and progress synchronization', () => {
     expect(requestedOffsets).toEqual([0, 256 * 1024, 256 * 1024, 2 * 256 * 1024]);
     expect((await listLibrary()).items).toHaveLength(1);
     expect((await allTasks(await syncRoot(config)))[0]).toMatchObject({ status: 'completed', progress: 100 });
+  });
+
+  it('gradually grows fast transfers up to 4 MiB while preserving exact video bytes', async () => {
+    content = Buffer.alloc(12 * 1024 * 1024 + 17, 91); remote.bytes = content.length;
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = () => { clock += 200; return undefined; };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    await processCacheTask(config, ID);
+    const sizes = requestedRanges.map(({ start, end }) => end - start + 1);
+    expect(sizes.slice(0, 6)).toEqual([MIN_CHUNK, 2 * MIN_CHUNK, 4 * MIN_CHUNK, 8 * MIN_CHUNK, 16 * MIN_CHUNK, 16 * MIN_CHUNK]);
+    expect(Math.max(...sizes)).toBe(4 * 1024 * 1024);
+    await expectExactCachedVideo();
+  });
+
+  it('reduces request sizes when a fast link slows down and retains the 256 KiB floor', async () => {
+    content = Buffer.alloc(12 * 1024 * 1024 + 17, 92); remote.bytes = content.length;
+    let clock = 0;
+    const durations = [200, 200, 200, 200, 8_000, 8_000, 16_000];
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = () => { clock += durations.shift() ?? 4_000; return undefined; };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    await processCacheTask(config, ID);
+    const sizes = requestedRanges.map(({ start, end }) => end - start + 1);
+    expect(sizes.slice(0, 8)).toEqual([MIN_CHUNK, 2 * MIN_CHUNK, 4 * MIN_CHUNK, 8 * MIN_CHUNK, 16 * MIN_CHUNK, 8 * MIN_CHUNK, 4 * MIN_CHUNK, MIN_CHUNK]);
+    expect(sizes.slice(0, -1).every((size) => size >= MIN_CHUNK)).toBe(true);
+    await expectExactCachedVideo();
+  });
+
+  it('discards a partially read timed-out block and retries its original offset with half the range', async () => {
+    content = Buffer.alloc(2 * 1024 * 1024 + 17, 93); remote.bytes = content.length;
+    let clock = 0;
+    let interrupted = false;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = ({ start, end }) => {
+      clock += 200;
+      if (start !== MIN_CHUNK || interrupted) return undefined;
+      interrupted = true;
+      let sent = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!sent) { sent = true; controller.enqueue(new Uint8Array(content.subarray(start, start + 1024))); }
+          else controller.error(new DOMException('Media read timed out', 'TimeoutError'));
+        },
+      }), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${content.length}`, 'Content-Length': String(end - start + 1) } });
+    };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    await processCacheTask(config, ID);
+    expect(requestedRanges.slice(0, 3)).toEqual([
+      { start: 0, end: MIN_CHUNK - 1 },
+      { start: MIN_CHUNK, end: 3 * MIN_CHUNK - 1 },
+      { start: MIN_CHUNK, end: 2 * MIN_CHUNK - 1 },
+    ]);
+    await expectExactCachedVideo();
+  });
+
+  it('does not shrink or retry an externally aborted large block even when SIGTERM has a TimeoutError reason', async () => {
+    content = Buffer.alloc(2 * 1024 * 1024, 94); remote.bytes = content.length;
+    let clock = 0;
+    let received!: () => void;
+    const reading = new Promise<void>((resolve) => { received = resolve; });
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = ({ start, end }, options) => {
+      clock += 200;
+      if (start !== MIN_CHUNK) return undefined;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          options.signal!.addEventListener('abort', () => controller.error(options.signal!.reason), { once: true });
+          received();
+        },
+      }), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${content.length}` } });
+    };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    const stopping = new AbortController();
+    const pending = processCacheTask(config, ID, stopping.signal);
+    await reading;
+    stopping.abort(new DOMException('SIGTERM', 'TimeoutError'));
+    await expect(pending).rejects.toMatchObject({ name: 'TimeoutError', message: 'SIGTERM' });
+    expect(requestedRanges).toEqual([{ start: 0, end: MIN_CHUNK - 1 }, { start: MIN_CHUNK, end: 3 * MIN_CHUNK - 1 }]);
+    expect((await listLibrary()).items).toHaveLength(0);
+    expect((await allTasks(await syncRoot(config)))[0].status).toBe('downloading');
+  });
+
+  it('does not repeatedly retry a small final tail just because the adaptive ceiling is larger', async () => {
+    content = Buffer.alloc(MIN_CHUNK + 17, 96); remote.bytes = content.length;
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = ({ start }) => {
+      clock += 200;
+      if (start === MIN_CHUNK) throw new DOMException('Tail read timed out', 'TimeoutError');
+      return undefined;
+    };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    await syncTick(config);
+    expect(requestedRanges).toEqual([{ start: 0, end: MIN_CHUNK - 1 }, { start: MIN_CHUNK, end: MIN_CHUNK + 16 }]);
+    expect((await allTasks(await syncRoot(config)))[0]).toMatchObject({ status: 'error', error: '连接服务器超时，请检查网络后重试' });
+    expect((await listLibrary()).items).toHaveLength(0);
+  });
+
+  it('resumes after restart from an adaptive, non-grid offset without redownloading committed bytes', async () => {
+    content = Buffer.alloc(3 * 1024 * 1024 + 17, 95); remote.bytes = content.length;
+    let clock = 0;
+    const durations = [200, 3_000, 4_000];
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    rangeResponse = () => {
+      clock += durations.shift() ?? 4_000;
+      if (requestedRanges.length === 4) throw new Error('Simulated restart');
+      return undefined;
+    };
+    const config = syncConfig()!;
+    await refreshCatalog(config); await enqueueCache({ itemId: ID });
+    await expect(processCacheTask(config, ID)).rejects.toThrow('Simulated restart');
+    const resumeOffset = requestedRanges[3].start;
+    expect(resumeOffset % MIN_CHUNK).not.toBe(0);
+    expect((await listLibrary()).items).toHaveLength(0);
+    await processCacheTask(config, ID);
+    expect(requestedRanges[4]).toEqual({ start: resumeOffset, end: resumeOffset + MIN_CHUNK - 1 });
+    expect(requestedOffsets.slice(4).every((offset) => offset >= resumeOffset)).toBe(true);
+    await expectExactCachedVideo();
   });
 
   it('recovers a crash after media commit and before mapping commit without creating a duplicate', async () => {
