@@ -37,6 +37,7 @@ beforeEach(async () => {
   vi.stubEnv('LOCAL_LIBRARY_DIR', directory);
   vi.stubEnv('LIBRARY_SERVER_URL', 'https://cloud.example.test');
   vi.stubEnv('LIBRARY_SERVER_PASSWORD', 'server-private-password');
+  vi.stubEnv('LIBRARY_SERVER_MEDIA_TRANSPORT', 'fetch');
   vi.stubEnv('PASSWORD', 'local-private-password');
   vi.stubEnv('PUBLIC_ORIGIN', '');
   content = Buffer.from('0123456789abcdef');

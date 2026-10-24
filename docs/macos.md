@@ -93,13 +93,17 @@ LIBRARY_SERVER_URL='https://media.example.com'
 LIBRARY_SERVER_PASSWORD='你的服务器访问密码'
 ```
 
-如果浏览器下载很快、后台缓存却明显慢，可对比系统代理与 TUN 路径。在确认现有 HTTP 代理更快后，可仅让 Mac 同步进程使用该代理：
+如果浏览器或系统 curl 下载很快，Node 后台缓存却慢，可选择 Mac 自带 curl 处理视频分块：
 
 ```sh
-LIBRARY_SERVER_PROXY='http://127.0.0.1:7897'
+LIBRARY_SERVER_MEDIA_TRANSPORT='curl'
 ```
 
-此项需要 Node.js 22.21+ 或 24.5+（[Node.js 代理支持说明](https://nodejs.org/learn/http/enterprise-network-configuration)），修改后重启本机服务。填写自己信任且实际运行的 HTTP / HTTPS 代理地址；7897 仅为示例。只影响独立同步进程，localhost 直连；Web 与源站下载进程保留各自的网络设置，HTTPS 证书校验仍然开启。代理程序停止时，同步和缓存会中断；可恢复代理，或删除此项并重启服务以使用默认路径。
+配置后重启本机服务。此方式仅用于已配置服务器的 HTTPS 视频 Range 请求：禁用显式代理与 curl 用户配置、不跟随重定向，保持证书校验；登录、目录和进度继续使用 Node。Cookie 通过标准输入传给 curl，避免出现在进程参数里。默认未设置时仍使用 `fetch`；其他系统选择 curl 前需先安装该程序。
+
+TUN 决定哪些流量进入虚拟网络，规则决定进入后使用哪个出站。命中 `DIRECT` 仍可能经过 TUN；一次具体网络中的慢速不能直接归因于所有 TUN 模式。可参考 [Mihomo TUN 路由说明](https://wiki.metacubex.one/en/config/inbound/tun/)。
+
+还保留可选的同步代理兼容方案：`LIBRARY_SERVER_PROXY='http://127.0.0.1:7897'`。它需要 Node.js 22.21+ 或 24.5+（[Node.js 代理说明](https://nodejs.org/learn/http/enterprise-network-configuration)），只影响独立同步进程，localhost 直连；代理退出会使同步中断。使用原生 curl 方案时可删除这项以移除代理依赖。
 
 离线缓存从小分块开始，根据实际传输速度逐步调整分块大小；网络变慢而读取超时时会缩小分块重试，已落盘的部分不会重复下载。提升幅度取决于实际网络和服务器出口带宽。
 

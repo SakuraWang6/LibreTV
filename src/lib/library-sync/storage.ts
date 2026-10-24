@@ -7,7 +7,7 @@ import type { LibraryEntry } from '@/lib/local-library/types';
 import type { SyncCacheTask, SyncProgressConflict } from './types';
 import { withFileLock } from '@/lib/local-library/file-lock';
 
-export interface SyncConfig { origin: string; password: string; libraryDirectory: string }
+export interface SyncConfig { origin: string; password: string; libraryDirectory: string; mediaTransport: 'fetch' | 'curl' }
 export interface Catalog { version: 1; items: LibraryEntry[]; online: boolean; checkedAt: number; error?: string }
 export interface CacheTask extends SyncCacheTask { version: 1; item: LibraryEntry; uploadId: string; createdAt: number; updatedAt: number }
 export interface Mapping {
@@ -28,7 +28,9 @@ export function syncConfig(): SyncConfig | null {
     throw new LibraryError('云端影视库需要使用不含密码或路径的 HTTPS 地址', 503);
   }
   if (!path.isAbsolute(libraryDirectory)) throw new LibraryError('本地影视库目录必须使用绝对路径', 503);
-  return { origin: url.origin, password, libraryDirectory };
+  const mediaTransport = process.env.LIBRARY_SERVER_MEDIA_TRANSPORT?.trim() || 'fetch';
+  if (mediaTransport !== 'fetch' && mediaTransport !== 'curl') throw new LibraryError('服务器视频传输方式应为 fetch 或 curl', 503);
+  return { origin: url.origin, password, libraryDirectory, mediaTransport };
 }
 
 export function itemId(value: unknown): string {

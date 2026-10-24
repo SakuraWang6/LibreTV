@@ -1,6 +1,7 @@
 import { LibraryError, validateLibraryMetadata } from '@/lib/local-library/server';
 import type { LibraryEntry } from '@/lib/local-library/types';
 import { itemId, type SyncConfig } from './storage';
+import { curlRangeResponse } from './curl';
 
 const sessions = new Map<string, { password: string; cookie: string }>();
 const FORMATS = new Set(['MP4', 'TS', 'WEBM', 'MOV']);
@@ -26,8 +27,13 @@ export async function boundedBytes(response: Response, maximum: number): Promise
 async function fetchRemote(config: SyncConfig, endpoint: string, options: RequestInit, signal?: AbortSignal): Promise<Response> {
   // Media bodies can take much longer on a low-bandwidth home/cloud link.
   // Authentication, catalog and cover requests keep their shorter deadline.
-  const timeout = AbortSignal.timeout(/^\/api\/library\/[a-f0-9]{32}\/media$/.test(endpoint) ? 60_000 : 15_000);
-  return fetch(`${config.origin}${endpoint}`, { ...options, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+  const media = /^\/api\/library\/[a-f0-9]{32}\/media$/.test(endpoint);
+  const timeout = AbortSignal.timeout(media ? 60_000 : 15_000);
+  const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  if (media && config.mediaTransport === 'curl' && (!options.method || options.method === 'GET')) {
+    return curlRangeResponse(`${config.origin}${endpoint}`, options.headers ?? {}, stop);
+  }
+  return fetch(`${config.origin}${endpoint}`, { ...options, redirect: 'error', signal: stop });
 }
 
 async function login(config: SyncConfig, signal?: AbortSignal): Promise<string> {
