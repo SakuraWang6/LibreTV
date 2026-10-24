@@ -3,6 +3,7 @@ import type { SourceConfig } from './types';
 // 仅类型引入：store.ts 运行时会引用本模块，反向只取类型不会形成运行时循环
 import type { LiveProbeEntry } from './store';
 import { PERSIST_KEY, flushPendingPersist } from './persist-storage';
+import type { LibraryMetadata } from './local-library/types';
 
 /**
  * IndexedDB 持久化（替代旧版 localStorage 数据库）：
@@ -62,6 +63,9 @@ export interface DownloadTaskEntry {
   title: string;
   /** 输出格式 */
   format: 'TS' | 'MP4';
+  /** Optional non-indexed fields preserve existing v3 task records. */
+  libraryMetadata?: LibraryMetadata;
+  saveDestination?: 'library' | 'file';
   status: DownloadStatus;
   finished: number;
   total: number;

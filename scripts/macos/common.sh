@@ -13,6 +13,9 @@ if [[ -f "$LIBRETV_ROOT/.env.macos.local" ]]; then
   set +a
 fi
 
+# Keep videos, posters and the catalog on disk, independent of browser caches.
+export LOCAL_LIBRARY_DIR="${LOCAL_LIBRARY_DIR:-$LIBRETV_ROOT/.local/library}"
+
 if [[ -z "${NODE_BINARY:-}" ]]; then
   NODE_BINARY="$(command -v node || true)"
 fi

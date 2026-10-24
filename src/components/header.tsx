@@ -38,7 +38,7 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
   return (
     <>
       <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-line">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
           <Link href="/" aria-label="LibreTV 首页" className="flex items-center shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/icons/icon-512.png" alt="LibreTV" className="w-7 h-7 rounded-lg" />
@@ -96,7 +96,10 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
 
           <div className="flex-1 sm:hidden" />
 
-          <nav className="flex items-center gap-1 ml-auto">
+          <nav className="flex shrink-0 items-center gap-0 sm:gap-1 ml-auto [&>button]:p-1.5 sm:[&>button]:p-2">
+            <HeaderLink href="/library" active={pathname.startsWith('/library')}>
+              本地库
+            </HeaderLink>
             <HeaderLink href="/live" active={pathname === '/live'}>
               直播
             </HeaderLink>
@@ -128,7 +131,7 @@ function HeaderLink({ href, active, children }: { href: string; active: boolean;
     <Link
       href={href}
       className={cn(
-        'px-2.5 py-1.5 rounded-md text-sm transition-colors',
+        'shrink-0 whitespace-nowrap px-1.5 sm:px-2.5 py-1.5 rounded-md text-xs sm:text-sm transition-colors',
         active ? 'text-content bg-hover' : 'text-muted hover:text-content'
       )}
     >

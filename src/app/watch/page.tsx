@@ -113,7 +113,10 @@ function WatchContent() {
   });
 
   const episodes = useMemo(() => detailQuery.data?.episodes ?? [], [detailQuery.data]);
-  const videoTitle = titleParam || detailQuery.data?.videoInfo?.title || '未知视频';
+  const videoInfo = detailQuery.data?.videoInfo;
+  const videoTitle = titleParam || videoInfo?.title || '未知视频';
+  const isSeries = !/电影|movie|film/i.test(videoInfo?.typeName || '')
+    && (/剧|连续|电视|series|drama|tv/i.test(videoInfo?.typeName || '') || episodes.length > 1);
 
   // 当前播放地址：优先取剧集列表中的当前集，其次直连 URL 参数
   const currentUrl = useMemo(() => {
@@ -297,6 +300,16 @@ function WatchContent() {
                   // 多集才带集数后缀；单集影片（含电影）文件名就是纯标题
                   title: `${videoTitle}${episodes.length > 1 ? ` 第${currentIndex + 1}集` : ''}`,
                   format: 'MP4',
+                  libraryMetadata: {
+                    title: videoInfo?.title || videoTitle,
+                    kind: isSeries ? 'tv' : 'movie',
+                    year: videoInfo?.year,
+                    description: videoInfo?.desc,
+                    coverUrl: videoInfo?.cover,
+                    sourceName: videoInfo?.sourceName || source.name,
+                    ...(isSeries
+                      ? { seasonNumber: 1, episodeNumber: currentIndex + 1, episodeTitle: `第 ${currentIndex + 1} 集` } : {}),
+                  },
                 });
                 // 「已加入下载队列」由 DownloadManager 在真正入队后提示：
                 // 这里先提示的话，用户随后取消保存位置会出现「已加入→已取消」的矛盾
