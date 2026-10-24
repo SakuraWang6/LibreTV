@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+LIBRETV_ROOT="$(cd "$APP_DIR/.." && pwd)"
+mkdir -p "$LIBRETV_ROOT/.local"
+"$LIBRETV_ROOT/scripts/macos/start.command" >>"$LIBRETV_ROOT/.local/launcher.log" 2>&1
+if [[ -d '/Applications/Google Chrome.app' ]]; then
+  /usr/bin/open -na '/Applications/Google Chrome.app' --args --app=http://127.0.0.1:8899 --user-data-dir="$LIBRETV_ROOT/.local/browser-profile" --no-first-run --no-default-browser-check
+else
+  /usr/bin/open http://127.0.0.1:8899
+fi

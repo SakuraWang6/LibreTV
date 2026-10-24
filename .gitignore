@@ -12,3 +12,6 @@ vitest-results.json
 .zcode/
 .codebuddy/
 generated-images/
+
+# Mac 本地运行状态和日志
+.local/
