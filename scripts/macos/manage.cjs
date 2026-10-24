@@ -59,7 +59,13 @@ async function healthy() {
   try {
     const response = await fetch(`${url}/api/status`, { signal: AbortSignal.timeout(2000) });
     const status = await response.json();
-    return response.ok && status.passwordRequired === true && typeof status.version === 'string' && Array.isArray(status.defaultSources);
+    const webReady = response.ok && status.passwordRequired === true && typeof status.version === 'string' && Array.isArray(status.defaultSources);
+    if (!webReady) return false;
+    if (process.env.LOCAL_LIBRARY_DIR && process.env.BACKGROUND_DOWNLOADS_ENABLED !== '0') {
+      const heartbeat = fs.statSync(path.join(process.env.LOCAL_LIBRARY_DIR, '.libretv/background/worker-heartbeat'));
+      if (Date.now() - heartbeat.mtimeMs > 30_000) return false;
+    }
+    return true;
   } catch { return false; }
 }
 
@@ -79,6 +85,13 @@ function prerequisites() {
   }
   if (!fs.existsSync(path.join(root, 'node_modules/next/dist/bin/next')) || !fs.existsSync(path.join(root, '.next/BUILD_ID'))) {
     throw new Error('缺少依赖或生产构建，请先在仓库中运行 npm ci 和 npm run build。');
+  }
+  if (process.env.LOCAL_LIBRARY_DIR && process.env.BACKGROUND_DOWNLOADS_ENABLED !== '0') {
+    if (!fs.existsSync(path.join(root, 'scripts/background-worker.cjs')) || !fs.existsSync(path.join(root, 'node_modules/typescript'))) {
+      throw new Error('缺少后台服务依赖，请先运行 npm ci。');
+    }
+    const ffmpeg = spawnSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-version'], { stdio: 'ignore' });
+    if (ffmpeg.status !== 0) throw new Error('找不到 FFmpeg，请安装后在 .env.macos.local 中设置 FFMPEG_PATH。');
   }
 }
 
@@ -143,26 +156,40 @@ async function run() {
   // Exclusive creation prevents two simultaneous launch requests from claiming the same server.
   if (readState() && !ownsProcess(readState())) fs.rmSync(stateFile, { force: true });
   fs.writeFileSync(stateFile, JSON.stringify({ pid: process.pid, token, root, startedAt: new Date().toISOString() }), { flag: 'wx', mode: 0o600 });
-  let child;
+  const children = [];
   let killTimer;
+  let stopping = false;
   const cleanup = () => { clearTimeout(killTimer); forgetState(token); };
   process.once('exit', cleanup);
   try {
-    child = spawn(process.execPath, [path.join(root, 'node_modules/next/dist/bin/next'), 'start', '-H', '127.0.0.1', '-p', '8899'], {
-      cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_ENV: 'production' },
-    });
     const terminate = () => {
-      if (killTimer) return;
-      child.kill('SIGTERM');
-      killTimer = setTimeout(() => child.kill('SIGKILL'), 8000);
+      if (stopping) return;
+      stopping = true;
+      for (const child of children) child.kill('SIGTERM');
+      killTimer = setTimeout(() => { for (const child of children) child.kill('SIGKILL'); }, 8000);
       killTimer.unref();
     };
     process.on('SIGTERM', terminate);
     process.on('SIGINT', terminate);
-    await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code, signal) => { process.exitCode = signal ? 0 : (code || 0); resolve(); });
-    });
+    const commands = [[path.join(root, 'node_modules/next/dist/bin/next'), 'start', '-H', '127.0.0.1', '-p', '8899']];
+    if (process.env.LOCAL_LIBRARY_DIR && process.env.BACKGROUND_DOWNLOADS_ENABLED !== '0') commands.push([path.join(root, 'scripts/background-worker.cjs')]);
+    if (process.env.LIBRARY_SERVER_URL) commands.push([path.join(root, 'scripts/library-sync-worker.cjs')]);
+    // The login service owns every child. A failed worker restarts the group,
+    // keeping a healthy web page from hiding a stopped background queue.
+    await Promise.all(commands.map((args) => new Promise((resolve) => {
+      const child = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_ENV: 'production' } });
+      children.push(child);
+      child.once('error', (error) => {
+        console.error(`[LibreTV] 后台进程无法启动：${error.message}`);
+        process.exitCode = 1;
+        terminate();
+        resolve();
+      });
+      child.once('exit', (code) => {
+        if (!stopping) { process.exitCode = code || 1; terminate(); }
+        resolve();
+      });
+    })));
   } finally { cleanup(); }
 }
 

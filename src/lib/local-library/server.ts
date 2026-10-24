@@ -3,9 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
-import { guardRequest } from '@/lib/api-guard';
 import { fetchUpstreamWithMeta } from '@/lib/fetch-utils';
 import type { LibraryEntry, LibraryMetadata, LibraryResponse } from './types';
+import { withFileLock } from './file-lock';
 
 const MAX_CHUNK = 8 * 1024 * 1024;
 const MAX_POSTER = 5 * 1024 * 1024;
@@ -132,6 +132,8 @@ function metadataOf(value: unknown): LibraryMetadata {
   return result;
 }
 
+export const validateLibraryMetadata = metadataOf;
+
 function filename(value: string): string {
   const result = value.normalize('NFKC').replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, '_').replace(/^[.\s]+|[.\s]+$/g, '');
   let safe = '';
@@ -178,18 +180,44 @@ export async function listLibrary(): Promise<LibraryResponse> {
   return { enabled: true, items: results.filter((item): item is LibraryEntry => item !== null).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
 }
 
-export async function createUpload(body: unknown): Promise<{ id: string; offset: number }> {
+export async function createUpload(body: unknown, requestedId?: string): Promise<{ id: string; offset: number }> {
   const root = await rootDirectory();
   const { uploads } = await storage(root);
   const data = body as Record<string, unknown> | null;
   if (!data || typeof data.format !== 'string' || !Object.hasOwn(FORMATS, data.format)) throw new LibraryError('不支持的视频格式');
   const metadata = metadataOf(data.metadata);
-  const id = crypto.randomBytes(16).toString('hex');
-  await fs.writeFile(path.join(uploads, `${id}.part`), '', { flag: 'wx', mode: 0o600 });
-  try {
-    await atomicJson(path.join(uploads, `${id}.json`), { version: 1, id, metadata, format: data.format as Format, createdAt: new Date().toISOString() } satisfies Upload);
-  } catch (error) { await fs.rm(path.join(uploads, `${id}.part`), { force: true }); throw error; }
-  return { id, offset: 0 };
+  const id = requestedId ?? crypto.randomBytes(16).toString('hex');
+  checkId(id);
+  return locked(`${root}:${id}`, async () => {
+    if (requestedId) {
+      const offline = (value: LibraryMetadata): string => {
+        const copy = { ...metadataOf(value) }; delete copy.coverUrl; return JSON.stringify(copy);
+      };
+      try {
+        const manifest = await readManifest(root, id);
+        if (manifest.item.format !== data.format || offline(manifest.item) !== offline(metadata)) throw new LibraryError('入库编号与影视信息不匹配', 409);
+        return { id, offset: manifest.item.bytes };
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      try {
+        const upload = await readJson<Upload>(root, uploadPath(id));
+        if (upload.format !== data.format || JSON.stringify(upload.metadata) !== JSON.stringify(metadata)) throw new LibraryError('上传编号与影视信息不匹配', 409);
+        return { id, offset: (await fs.stat(await safeFile(root, partPath(id)))).size };
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
+    let created = false;
+    try { await fs.writeFile(path.join(uploads, `${id}.part`), '', { flag: 'wx', mode: 0o600 }); created = true; }
+    catch (error) {
+      // A fixed service-owned id can survive a crash between creating the empty
+      // part and its metadata. Only that empty regular file is recoverable.
+      if (!requestedId || (error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const part = await fs.lstat(path.join(uploads, `${id}.part`));
+      if (!part.isFile() || part.isSymbolicLink() || part.size !== 0) throw new LibraryError('临时上传缺少元数据，未覆盖原文件', 409);
+    }
+    try {
+      await atomicJson(path.join(uploads, `${id}.json`), { version: 1, id, metadata, format: data.format as Format, createdAt: new Date().toISOString() } satisfies Upload);
+    } catch (error) { if (created) await fs.rm(path.join(uploads, `${id}.part`), { force: true }); throw error; }
+    return { id, offset: 0 };
+  });
 }
 
 async function boundedBody(body: ReadableStream<Uint8Array> | null, max: number): Promise<Buffer> {
@@ -337,21 +365,58 @@ export async function cancelUpload(id: string): Promise<{ cancelled: true }> {
   });
 }
 
+/** Progress is written by both the web server and the independent sync daemon. */
+async function withManifestLock<T>(root: string, id: string, action: () => Promise<T>): Promise<T> {
+  const directory = await safeDirectory(root, path.join('.libretv', 'locks'));
+  return withFileLock(path.join(directory, `${id}.lock`), action);
+}
+
+export async function getLibraryEntry(id: string): Promise<LibraryEntry> {
+  checkId(id);
+  const root = await rootDirectory();
+  const manifest = await readManifest(root, id);
+  await safeFile(root, manifest.mediaPath);
+  return publicItem(manifest);
+}
+
+/** Trusted internal import of a bounded remote poster; never accepts a file path. */
+export async function saveLibraryPoster(id: string, bytes: Uint8Array): Promise<void> {
+  checkId(id);
+  if (bytes.byteLength > MAX_POSTER) return;
+  const buffer = Buffer.from(bytes);
+  const format = imageFormat(buffer);
+  if (!format) return; // Generated SVG remains local; external SVG is never persisted.
+  const root = await rootDirectory();
+  await withManifestLock(root, id, async () => {
+    const manifest = await readManifest(root, id);
+    const media = await safeFile(root, manifest.mediaPath);
+    const poster = path.join(path.dirname(media), `海报-${id}.${format.extension}`);
+    try { await fs.writeFile(poster, buffer, { flag: 'wx', mode: 0o600 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    await safeFile(root, path.relative(root, poster));
+    manifest.posterPath = path.relative(root, poster);
+    await atomicJson(path.join(root, manifestPath(id)), manifest);
+  });
+}
+
 export async function updateProgress(id: string, body: unknown): Promise<{ item: LibraryEntry }> {
   checkId(id);
   const data = body as Record<string, unknown> | null;
   if (!data || typeof data.position !== 'number' || !Number.isFinite(data.position) || data.position < 0 || (data.duration !== undefined && (typeof data.duration !== 'number' || !Number.isFinite(data.duration) || data.duration < 0))) {
     throw new LibraryError('无效的播放进度');
   }
+  const conditional = Object.hasOwn(data, 'expectedLastPlayedAt');
+  if (conditional && data.expectedLastPlayedAt !== null && (typeof data.expectedLastPlayedAt !== 'string' || data.expectedLastPlayedAt.length > 80)) throw new LibraryError('无效的观看进度版本');
   const root = await rootDirectory();
-  return locked(`${root}:${id}`, async () => {
+  return locked(`${root}:${id}`, () => withManifestLock(root, id, async () => {
     const manifest = await readManifest(root, id);
+    if (conditional && (manifest.item.lastPlayedAt ?? null) !== data.expectedLastPlayedAt) throw new LibraryError('观看进度已改变，请刷新后重试', 409);
     manifest.item.position = data.position as number;
     if (typeof data.duration === 'number') manifest.item.duration = data.duration;
-    manifest.item.lastPlayedAt = new Date().toISOString();
+    manifest.item.lastPlayedAt = new Date(Math.max(Date.now(), (Date.parse(manifest.item.lastPlayedAt ?? '') || 0) + 1)).toISOString();
     await atomicJson(path.join(root, manifestPath(id)), manifest);
     return { item: publicItem(manifest) };
-  });
+  }));
 }
 
 function byteRange(header: string | null, size: number): [number, number] | null {
@@ -381,6 +446,10 @@ export async function mediaResponse(id: string, request: Request): Promise<Respo
   try {
     const { size } = await handle.stat();
     const headers = new Headers({ 'Content-Type': FORMATS[manifest.item.format][1], 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' });
+    if (new URL(request.url).searchParams.get('download') === '1') {
+      const label = `${filename(manifest.item.title)}.${FORMATS[manifest.item.format][0]}`;
+      headers.set('Content-Disposition', `attachment; filename="video.${FORMATS[manifest.item.format][0]}"; filename*=UTF-8''${encodeURIComponent(label).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`);
+    }
     let range: [number, number] | null;
     try { range = byteRange(request.headers.get('range'), size); }
     catch (error) {
@@ -440,8 +509,20 @@ export async function posterResponse(id: string): Promise<Response> {
 function mutationAllowed(request: Request): boolean {
   const url = new URL(request.url);
   const host = request.headers.get('host');
+  const configuredOrigin = process.env.PUBLIC_ORIGIN?.trim();
   let publicUrl = url;
-  if (host) {
+  if (configuredOrigin) {
+    // A reverse proxy may terminate HTTPS and forward to an internal HTTP
+    // listener. Only an explicit deployment origin can bridge that difference;
+    // client-supplied X-Forwarded-* headers never grant trust here.
+    try {
+      publicUrl = new URL(configuredOrigin);
+      if (!['https:', 'http:'].includes(publicUrl.protocol) || publicUrl.username || publicUrl.password
+        || publicUrl.pathname !== '/' || publicUrl.search || publicUrl.hash) return false;
+      if (!host || /[\s/\\@?#]/.test(host)) return false;
+      if (new URL(`${publicUrl.protocol}//${host}`).origin !== publicUrl.origin) return false;
+    } catch { return false; }
+  } else if (host) {
     // Next builds Request.url from its listening hostname, which may be
     // localhost/0.0.0.0 while the browser accesses 127.0.0.1. The actual Host
     // remains the browser's origin authority; never compare Origin to Next's
@@ -463,6 +544,9 @@ function mutationAllowed(request: Request): boolean {
 
 /** Consistent authentication, CSRF and non-sensitive error handling for every library API. */
 export async function libraryRoute(request: Request, mutating: boolean, action: () => Promise<Response | unknown>): Promise<Response> {
+  // Disk operations also run in the standalone Node workers. Load the Next
+  // request adapter only when actually handling an HTTP route.
+  const { guardRequest } = await import('@/lib/api-guard');
   const guard = guardRequest(request);
   if (guard) return guard;
   if (mutating && !mutationAllowed(request)) return Response.json({ error: '请求来源不匹配' }, { status: 403 });

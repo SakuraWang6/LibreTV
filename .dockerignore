@@ -13,6 +13,8 @@ tsconfig.tsbuildinfo
 .env
 .env*.local
 *.log
+.local
+LibreTV.app
 
 # 文档与编排文件（不参与镜像构建）
 Dockerfile

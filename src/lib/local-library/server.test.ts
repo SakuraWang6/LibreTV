@@ -28,6 +28,19 @@ function request(url: string, method = 'GET', body?: BodyInit, headers: HeadersI
   return new Request(`${BASE}${url}`, { method, body, headers: { cookie, ...headers } });
 }
 
+function adaptedRequest(internalOrigin: string, headers: Record<string, string>): Request {
+  // Match production NextServer's internal initURL and retained public Host.
+  const incoming = new IncomingMessage(new Socket());
+  incoming.method = 'POST';
+  incoming.url = '/api/library/uploads';
+  incoming.headers = { cookie, ...headers };
+  incoming.push(JSON.stringify({ metadata: { title: 'Next production request', kind: 'movie' }, format: 'MP4' }));
+  incoming.push(null);
+  const nodeRequest = new NodeNextRequest(incoming);
+  addRequestMeta(nodeRequest, 'initURL', `${internalOrigin}/api/library/uploads`);
+  return NextRequestAdapter.fromNodeNextRequest(nodeRequest, new AbortController().signal);
+}
+
 async function begin(metadata: LibraryMetadata = { title: '测试电影', kind: 'movie', year: '2026' }, format = 'MP4'): Promise<string> {
   const response = await create(request('/api/library/uploads', 'POST', JSON.stringify({ metadata, format })));
   expect(response.status).toBe(200);
@@ -57,6 +70,7 @@ beforeEach(async () => {
   vi.stubEnv('LOCAL_LIBRARY_DIR', directory);
   vi.stubEnv('PASSWORD', 'library-test-password');
   vi.stubEnv('PROXY_SECRET', 'library-test-secret');
+  vi.stubEnv('PUBLIC_ORIGIN', '');
   cookie = `${SESSION_COOKIE}=${signSession().token}`;
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('Tests must not make network requests'))));
 });
@@ -102,17 +116,7 @@ describe('local library authenticated disk API', () => {
   it('accepts actual Next request adaptation when the listen hostname differs from the browser Host', async () => {
     // Production NextServer sets initURL with fetchHostname, then this adapter
     // turns that internal URL into Request.url while preserving public Host.
-    const adapted = (listenHost: string, origin?: string, host = '127.0.0.1:8899') => {
-      const incoming = new IncomingMessage(new Socket());
-      incoming.method = 'POST';
-      incoming.url = '/api/library/uploads';
-      incoming.headers = { host, cookie, ...(origin ? { origin } : {}) };
-      incoming.push(JSON.stringify({ metadata: { title: 'Next production request', kind: 'movie' }, format: 'MP4' }));
-      incoming.push(null);
-      const nodeRequest = new NodeNextRequest(incoming);
-      addRequestMeta(nodeRequest, 'initURL', `http://${listenHost}:8899/api/library/uploads`);
-      return NextRequestAdapter.fromNodeNextRequest(nodeRequest, new AbortController().signal);
-    };
+    const adapted = (listenHost: string, origin?: string, host = '127.0.0.1:8899') => adaptedRequest(`http://${listenHost}:8899`, { host, ...(origin ? { origin } : {}) });
     for (const listenHost of ['localhost', '0.0.0.0', '[::]']) {
       const browserRequest = adapted(listenHost, BASE);
       expect(new URL(browserRequest.url).hostname).toBe(listenHost);
@@ -123,6 +127,48 @@ describe('local library authenticated disk API', () => {
     expect((await create(adapted('localhost', 'https://attacker.test'))).status).toBe(403);
     expect((await create(adapted('localhost', undefined, 'attacker.test:8899'))).status).toBe(403);
     expect((await create(adapted('localhost', undefined, '127.0.0.1:9999'))).status).toBe(403);
+  });
+
+  it('accepts an explicitly configured public origin through a real HTTPS-terminating reverse proxy', async () => {
+    vi.stubEnv('PUBLIC_ORIGIN', 'https://media.example.test/');
+    const internalOrigin = 'http://localhost:8899';
+    const cases: Record<string, string>[] = [
+      { host: 'media.example.test', origin: 'https://media.example.test' },
+      { host: 'media.example.test:443', origin: 'https://media.example.test' },
+      { host: 'media.example.test' }, // Authenticated native clients omit Origin.
+      { host: 'media.example.test', origin: 'https://media.example.test', 'x-forwarded-host': 'attacker.test', 'x-forwarded-proto': 'http' },
+    ];
+    for (const headers of cases) {
+      const incoming = adaptedRequest(internalOrigin, headers);
+      expect(new URL(incoming.url).origin).toBe(internalOrigin);
+      expect((await create(incoming)).status).toBe(200);
+    }
+  });
+
+  it('rejects forged public origins, actual Hosts and forwarding headers', async () => {
+    vi.stubEnv('PUBLIC_ORIGIN', 'https://media.example.test');
+    const cases: Record<string, string>[] = [
+      { host: 'media.example.test', origin: 'https://attacker.test' },
+      { host: 'media.example.test', origin: 'http://media.example.test' },
+      { host: 'media.example.test', origin: 'https://media.example.test:444' },
+      { host: 'media.example.test', origin: 'null' },
+      { host: 'media.example.test', origin: 'https://media.example.test', 'sec-fetch-site': 'cross-site' },
+      { host: 'attacker.test', origin: 'https://media.example.test' },
+      { host: 'media.example.test:444', origin: 'https://media.example.test' },
+      { host: 'media.example.test@attacker.test', origin: 'https://media.example.test' },
+      { host: '127.0.0.1:8899', origin: 'https://media.example.test', 'x-forwarded-host': 'media.example.test', 'x-forwarded-proto': 'https' },
+      { origin: 'https://media.example.test', 'x-forwarded-host': 'media.example.test', 'x-forwarded-proto': 'https' },
+    ];
+    for (const headers of cases) {
+      expect((await create(adaptedRequest('http://127.0.0.1:8899', headers))).status).toBe(403);
+    }
+  });
+
+  it('fails closed for invalid configured public origins', async () => {
+    for (const configuredOrigin of ['invalid', 'ftp://media.example.test', 'https://media.example.test/library', 'https://user:password@media.example.test', 'https://media.example.test?redirect=1', 'https://media.example.test#fragment']) {
+      vi.stubEnv('PUBLIC_ORIGIN', configuredOrigin);
+      expect((await create(adaptedRequest('http://127.0.0.1:8899', { host: 'media.example.test', origin: 'https://media.example.test' }))).status).toBe(403);
+    }
   });
 
   it('validates classification, format, season and JSON without leaking internal paths', async () => {
@@ -321,6 +367,27 @@ describe('local library authenticated disk API', () => {
     expect(saved).toMatchObject({ position: 123.5, duration: 1800 });
     expect(Number.isFinite(Date.parse(saved.lastPlayedAt))).toBe(true);
     expect((await progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position: -1 })), context(item.id))).status).toBe(400);
+  });
+
+  it('atomically rejects stale progress versions and keeps versions distinct for immediate writes', async () => {
+    const item = await add();
+    const first = await progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position: 100, expectedLastPlayedAt: null })), context(item.id));
+    const version = (await first.json()).item.lastPlayedAt;
+    expect((await progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position: 1, expectedLastPlayedAt: null })), context(item.id))).status).toBe(409);
+    const simultaneous = await Promise.all([101, 102].map((position) => progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position, expectedLastPlayedAt: version })), context(item.id))));
+    expect(simultaneous.map((response) => response.status).sort()).toEqual([200, 409]);
+    const saved = (await (await list(request('/api/library'))).json()).items[0];
+    expect(saved.lastPlayedAt).not.toBe(version);
+    expect([101, 102]).toContain(saved.position);
+  });
+
+  it('offers a same-origin attachment download with a safe UTF-8 filename and unchanged Range support', async () => {
+    const item = await add({ title: '测试影片 "标题"', kind: 'movie' });
+    const response = await media(request(`${item.mediaUrl}?download=1`, 'GET', undefined, { range: 'bytes=2-5' }), context(item.id));
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-disposition')).toContain('attachment;');
+    expect(response.headers.get('content-disposition')).toContain("filename*=UTF-8''");
+    expect(await response.text()).toBe('2345');
   });
 
   it('refuses manipulated manifest paths and symlinks instead of exposing arbitrary local files', async () => {

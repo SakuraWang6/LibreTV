@@ -1,0 +1,46 @@
+import dns from 'node:dns/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { publicAddresses } from './safe-fetch';
+import * as trustedDns from './trusted-dns';
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+describe('download socket DNS pinning', () => {
+  it('rejects literal cloud metadata/private targets before a socket can be created', async () => {
+    for (const url of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1:8899/api/library', 'file:///etc/passwd', 'http://[::1]/']) {
+      await expect(publicAddresses(new URL(url))).rejects.toThrow('拒绝');
+    }
+  });
+
+  it('rechecks the exact DNS answer that will be pinned even if precheck saw a public address', async () => {
+    vi.spyOn(dns, 'lookup').mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }] as never).mockResolvedValueOnce([{ address: '169.254.169.254', family: 4 }] as never);
+    await expect(publicAddresses(new URL('https://rebind.example/video.mp4'))).rejects.toThrow('私有网络');
+  });
+
+  it('keeps only a vetted address set for the socket and refuses URL credentials', async () => {
+    vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '8.8.4.4', family: 4 }] as never);
+    expect(await publicAddresses(new URL('https://cdn.example/video.ts'))).toEqual([{ address: '8.8.4.4', family: 4 }]);
+    await expect(publicAddresses(new URL('https://secret:password@cdn.example/video.ts'))).rejects.toThrow('拒绝');
+  });
+
+  it('rejects multicast, alternate link-local IPv6 and the whole CGNAT block', async () => {
+    for (const address of ['224.0.0.1', '255.255.255.255', '100.127.0.1', 'fe90::1']) {
+      vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '8.8.8.8', family: 4 }] as never)
+        .mockResolvedValueOnce([{ address: '8.8.8.8', family: 4 }] as never)
+        .mockResolvedValueOnce([{ address, family: address.includes(':') ? 6 : 4 }] as never);
+      await expect(publicAddresses(new URL('https://cdn.example/video'))).rejects.toThrow('私有网络');
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('uses explicitly configured trusted DNS instead of OS fake-IP and still validates its returned addresses', async () => {
+    vi.stubEnv('BACKGROUND_DOWNLOAD_DOH_URL', 'https://cloudflare-dns.com/dns-query');
+    const system = vi.spyOn(dns, 'lookup').mockRejectedValue(new Error('OS DNS must never be used'));
+    const trusted = vi.spyOn(trustedDns, 'resolveTrustedDns').mockResolvedValue([{ address: '151.101.2.132', family: 4 }]);
+    expect(await publicAddresses(new URL('https://cdn.example/video.ts'))).toEqual([{ address: '151.101.2.132', family: 4 }]);
+    expect(system).not.toHaveBeenCalled();
+    trusted.mockResolvedValueOnce([{ address: '198.18.0.36', family: 4 }]);
+    await expect(publicAddresses(new URL('https://cdn.example/video.ts'))).rejects.toThrow('私有网络');
+    await expect(publicAddresses(new URL('http://169.254.169.254/'))).rejects.toThrow('拒绝');
+  });
+});

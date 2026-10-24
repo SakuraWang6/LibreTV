@@ -1,0 +1,29 @@
+services:
+  web:
+    image: libretv-library:local
+    build: .
+    restart: unless-stopped
+    env_file: ${LIBRETV_ENV_FILE:-.env.library.local}
+    environment:
+      LOCAL_LIBRARY_DIR: /data/library
+    ports:
+      - "127.0.0.1:${LIBRETV_LOCAL_PORT:-8897}:8080"
+    volumes:
+      - ${LIBRETV_LIBRARY_DIR:-./.local/library}:/data/library
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+  downloads:
+    image: libretv-library:local
+    restart: unless-stopped
+    command: ["node", "scripts/background-worker.cjs"]
+    env_file: ${LIBRETV_ENV_FILE:-.env.library.local}
+    environment:
+      LOCAL_LIBRARY_DIR: /data/library
+    volumes:
+      - ${LIBRETV_LIBRARY_DIR:-./.local/library}:/data/library
+    mem_limit: 512m
