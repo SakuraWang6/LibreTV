@@ -9,6 +9,7 @@ FROM dependencies AS builder
 COPY . .
 ENV DOCKER_BUILD=1
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS=--max-old-space-size=768
 RUN npm run build
 
 # ---- 运行阶段 ----
