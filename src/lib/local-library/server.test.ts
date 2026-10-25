@@ -14,6 +14,7 @@ import { POST as create } from '@/app/api/library/uploads/route';
 import { PUT as append, DELETE as cancel } from '@/app/api/library/uploads/[id]/route';
 import { POST as complete } from '@/app/api/library/uploads/[id]/complete/route';
 import { PATCH as progress } from '@/app/api/library/[id]/route';
+import { PATCH as metadata } from '@/app/api/library/[id]/metadata/route';
 import { GET as media, HEAD as mediaHead } from '@/app/api/library/[id]/media/route';
 import { GET as poster } from '@/app/api/library/[id]/poster/route';
 import type { LibraryEntry, LibraryMetadata } from './types';
@@ -92,10 +93,10 @@ describe('local library authenticated disk API', () => {
     const calls = [
       list(unauthenticated('GET')), create(unauthenticated('POST')),
       append(unauthenticated('PUT'), context(id)), cancel(unauthenticated('DELETE'), context(id)),
-      complete(unauthenticated('POST'), context(id)), progress(unauthenticated('PATCH'), context(id)),
+      complete(unauthenticated('POST'), context(id)), progress(unauthenticated('PATCH'), context(id)), metadata(unauthenticated('PATCH'), context(id)),
       media(unauthenticated('GET'), context(id)), mediaHead(unauthenticated('HEAD'), context(id)), poster(unauthenticated('GET'), context(id)),
     ];
-    expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(9).fill(401));
+    expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(10).fill(401));
     vi.stubEnv('PASSWORD', '');
     expect((await list(request('/api/library'))).status).toBe(503);
   });
@@ -105,6 +106,7 @@ describe('local library authenticated disk API', () => {
     for (const headers of hostileHeaders) {
       const response = await create(request('/api/library/uploads', 'POST', '{}', headers));
       expect(response.status).toBe(403);
+      expect((await metadata(request(`/api/library/${'a'.repeat(32)}/metadata`, 'PATCH', '{}', headers), context('a'.repeat(32)))).status).toBe(403);
     }
     const id = await begin(); // no Origin: authenticated local CLI
     const response = await put(id, 'data');
@@ -346,6 +348,141 @@ describe('local library authenticated disk API', () => {
       expect(response.headers.get('content-type')).toContain('image/svg+xml');
       expect(await response.text()).not.toContain('onload');
     }
+  });
+
+  it('updates descriptive metadata and grouping without moving media or changing progress', async () => {
+    const item = await add({ title: '原片名', kind: 'movie', year: '1972' });
+    expect(item.hasPoster).toBe(false);
+    const manifestFile = path.join(directory, '.libretv', 'items', `${item.id}.json`);
+    const before = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+    const savedProgress = await (await progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position: 123, duration: 3600 })), context(item.id))).json();
+    const response = await metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: {
+      title: '规范剧名', kind: 'tv', year: '1974', description: '影片简介', sourceName: '资料来源', seasonNumber: 2, episodeNumber: 3,
+      // These are not editable metadata and cannot redirect the manifest.
+      id: 'b'.repeat(32), mediaPath: '/etc/passwd', position: 0, bytes: 1,
+    } })), context(item.id));
+    expect(response.status).toBe(200);
+    const updated = (await response.json()).item as LibraryEntry;
+    expect(updated).toMatchObject({
+      id: item.id, title: '规范剧名', kind: 'tv', year: '1974', description: '影片简介', sourceName: '资料来源', seasonNumber: 2, episodeNumber: 3,
+      bytes: item.bytes, format: item.format, createdAt: item.createdAt,
+      position: 123, duration: 3600, lastPlayedAt: savedProgress.item.lastPlayedAt, hasPoster: false,
+    });
+    expect(updated.groupId).not.toBe(item.groupId);
+    expect(updated.posterUrl).toMatch(new RegExp(`^/api/library/${item.id}/poster\\?v=[a-f0-9]{24}$`));
+    expect(updated.mediaUrl).toBe(item.mediaUrl);
+    const after = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+    expect(after.mediaPath).toBe(before.mediaPath);
+    expect(await fs.readFile(path.join(directory, after.mediaPath), 'utf8')).toBe('0123456789');
+    expect(await fs.readdir(path.join(directory, '电影', '原片名 (1972)'))).toEqual([`原片名 [${item.id}].mp4`]);
+    expect((await fs.readdir(directory))).not.toContain('电视剧');
+    expect((await (await list(request('/api/library'))).json()).items[0].posterUrl).toBe(updated.posterUrl);
+    expect(await (await poster(request(updated.posterUrl), context(item.id))).text()).toContain('规范剧名');
+    const backToMovie = await metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: { title: '规范电影', kind: 'movie' } })), context(item.id));
+    const movie = (await backToMovie.json()).item;
+    expect(movie.kind).toBe('movie');
+    expect(movie).not.toHaveProperty('seasonNumber');
+    expect(movie).not.toHaveProperty('episodeNumber');
+  });
+
+  it('replaces only the item-owned poster and changes its URL immediately', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(PNG, { headers: { 'Content-Type': 'image/png' } })));
+    const item = await add({ title: '海报更新', kind: 'movie', coverUrl: 'https://93.184.216.34/first.png' });
+    expect(item.hasPoster).toBe(true);
+    const manifestFile = path.join(directory, '.libretv', 'items', `${item.id}.json`);
+    const before = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+    const unrelated = path.join(directory, path.dirname(before.mediaPath), '自己的封面.png');
+    await fs.writeFile(unrelated, 'user poster');
+    const replacement = Buffer.from(PNG); replacement[replacement.length - 1] ^= 1;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(replacement, { headers: { 'Content-Type': 'image/png' } })));
+    const response = await metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: {
+      title: item.title, kind: 'movie', description: '补全简介', coverUrl: 'https://93.184.216.34/second.png',
+    } })), context(item.id));
+    expect(response.status).toBe(200);
+    const updated = (await response.json()).item;
+    expect(updated.hasPoster).toBe(true);
+    expect(updated.posterUrl).not.toBe(item.posterUrl);
+    const after = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+    expect(after.mediaPath).toBe(before.mediaPath);
+    expect(after.posterPath).not.toBe(before.posterPath);
+    await expect(fs.stat(path.join(directory, before.posterPath))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(unrelated, 'utf8')).toBe('user poster');
+    vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Offline'); }));
+    expect(Buffer.from(await (await poster(request(updated.posterUrl), context(item.id))).arrayBuffer())).toEqual(replacement);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves the existing metadata and poster when a new cover is unsafe or invalid', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(PNG, { headers: { 'Content-Type': 'image/png' } })));
+    const item = await add({ title: '原资料', kind: 'tv', seasonNumber: 2, episodeNumber: 9, coverUrl: 'https://93.184.216.34/first.png' });
+    const manifestFile = path.join(directory, '.libretv', 'items', `${item.id}.json`);
+    const before = await fs.readFile(manifestFile, 'utf8');
+    for (const [url, response] of [
+      ['http://127.0.0.1/private', new Response(PNG, { headers: { 'Content-Type': 'image/png' } })],
+      ['https://93.184.216.34/redirect', new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/private' } })],
+      ['https://93.184.216.34/html', new Response('<html>not a poster</html>', { headers: { 'Content-Type': 'image/png' } })],
+      ['https://93.184.216.34/large', new Response('oversized', { headers: { 'Content-Type': 'image/png', 'Content-Length': String(5 * 1024 * 1024 + 1) } })],
+    ] as const) {
+      const fetchSpy = vi.fn(async () => response); vi.stubGlobal('fetch', fetchSpy);
+      const result = await metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: { title: '不得写入', kind: 'movie', coverUrl: url } })), context(item.id));
+      expect(result.status).toBe(502);
+      expect((await result.json()).error).toBe('无法下载有效海报，请更换资料来源后重试');
+      expect(await fs.readFile(manifestFile, 'utf8')).toBe(before);
+      if (url.includes('127.0.0.1')) expect(fetchSpy).not.toHaveBeenCalled();
+    }
+    const manifest = JSON.parse(before);
+    expect(await fs.readdir(path.join(directory, path.dirname(manifest.mediaPath)))).toEqual([path.basename(manifest.mediaPath), path.basename(manifest.posterPath)].sort());
+  });
+
+  it('allows progress to save while poster lookup waits and preserves its latest version', async () => {
+    const item = await add();
+    let release!: (response: Response) => void;
+    const fetchSpy = vi.fn(() => new Promise<Response>((resolve) => { release = resolve; }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const updating = metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: {
+      title: '资料已更新', kind: 'movie', coverUrl: 'https://93.184.216.34/poster.png',
+    } })), context(item.id));
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    let saved: { item: LibraryEntry } | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const response = await Promise.race([
+        progress(request(`/api/library/${item.id}`, 'PATCH', JSON.stringify({ position: 777, duration: 1800 })), context(item.id)),
+        new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error('Poster lookup blocked progress')), 1000); }),
+      ]);
+      expect(response.status).toBe(200);
+      saved = await response.json();
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      release(new Response(PNG, { headers: { 'Content-Type': 'image/png' } }));
+      await updating;
+    }
+    const response = await updating;
+    expect(response.status).toBe(200);
+    expect((await response.json()).item).toMatchObject({ title: '资料已更新', position: 777, duration: 1800, lastPlayedAt: saved!.item.lastPlayedAt });
+  });
+
+  it('removes only the newly written poster when metadata commit fails', async () => {
+    const item = await add();
+    const manifestFile = path.join(directory, '.libretv', 'items', `${item.id}.json`);
+    const before = await fs.readFile(manifestFile, 'utf8');
+    const manifest = JSON.parse(before);
+    const mediaDirectory = path.join(directory, path.dirname(manifest.mediaPath));
+    const files = await fs.readdir(mediaDirectory);
+    const realManifestFile = await fs.realpath(manifestFile);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(PNG, { headers: { 'Content-Type': 'image/png' } })));
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementation(async (...args) => {
+      if (args[1] === realManifestFile) throw new Error('Disk failure before commit');
+      return originalRename(...args);
+    });
+    try {
+      const response = await metadata(request(`/api/library/${item.id}/metadata`, 'PATCH', JSON.stringify({ metadata: { title: '不能提交', kind: 'movie', coverUrl: 'https://93.184.216.34/poster.png' } })), context(item.id));
+      expect(response.status).toBe(500);
+      expect(await fs.readFile(manifestFile, 'utf8')).toBe(before);
+      expect(await fs.readdir(mediaDirectory)).toEqual(files);
+      expect(await fs.readFile(path.join(directory, manifest.mediaPath), 'utf8')).toBe('0123456789');
+    } finally { rename.mockRestore(); }
   });
 
   it('cancels only unfinished staging, refuses empty completion, and preserves committed media', async () => {

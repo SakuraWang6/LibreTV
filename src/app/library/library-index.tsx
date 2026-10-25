@@ -3,22 +3,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { api, STATUS_QUERY_KEY } from '@/lib/client-api';
 import { Header } from '@/components/header';
 import { useAuth } from '@/components/auth';
 import { fetchLibrary, guessLibraryMetadata, importLibraryFile } from '@/lib/local-library/client';
+import { matchLibraryMetadata } from '@/lib/local-library/metadata-match';
+import { isInDisabledSubscription, isSourceDisabled, resolveSource, useAppStore } from '@/lib/store';
+import type { SourceConfig } from '@/lib/types';
 import { LOCAL_LIBRARY_UPDATED_EVENT, type LibraryEntry, type LibraryKind, type LibraryMetadata } from '@/lib/local-library/types';
 import { fetchLibrarySync } from '@/lib/library-sync-client';
 import type { SyncStatus } from '@/lib/library-sync/types';
 import { ProgressConflicts, ServerLibrary } from './server-library';
+import { LibraryMetadataCompletion } from './library-metadata';
+import { ExternalLibraryDialog } from './external-library';
 import { LibraryIcon, type LibraryIconName, episodeLabel, orderedEpisodes, percentPlayed, sizeLabel, timeLabel, unfinished } from './library-ui';
 import styles from './library.module.css';
 
 type Collection = { id: string; entry: LibraryEntry; episodes: LibraryEntry[] };
-type ImportItem = { file: File; metadata: LibraryMetadata; progress: number; state: 'ready' | 'uploading' | 'done' | 'error'; error?: string };
+type ImportItem = { file: File; metadata: LibraryMetadata; progress: number; state: 'ready' | 'matching' | 'uploading' | 'done' | 'error'; metadataStatus?: 'matched' | 'unmatched' | 'ambiguous' | 'unavailable'; error?: string };
 function Poster({ entry, className = '' }: { entry: LibraryEntry; className?: string }) {
   const [failed, setFailed] = useState(false);
   // The library only renders its cached local cover. A remote fallback would break offline playback.
   const localPoster = entry.posterUrl.startsWith('/api/library/') ? entry.posterUrl : '';
+  useEffect(() => setFailed(false), [localPoster]);
   return (
     <div className={`${styles.poster} ${className}`}>
       {localPoster && !failed ? (
@@ -34,6 +42,13 @@ function Poster({ entry, className = '' }: { entry: LibraryEntry; className?: st
 export default function LibraryIndex() {
   const router = useRouter();
   const { checked, verified, openLogin } = useAuth();
+  const status = useQuery({ queryKey: STATUS_QUERY_KEY, queryFn: api.status, staleTime: 30_000 });
+  const directoryImport = status.data?.localAuthBypass === true;
+  const selectedKeys = useAppStore((state) => state.selectedKeys);
+  const envSources = useAppStore((state) => state.envSources);
+  const customAPIs = useAppStore((state) => state.customAPIs);
+  const sourceHealth = useAppStore((state) => state.sourceHealth);
+  const subscriptions = useAppStore((state) => state.subscriptions);
   const [items, setItems] = useState<LibraryEntry[]>([]);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,9 +63,20 @@ export default function LibraryIndex() {
   const [syncError, setSyncError] = useState('');
   const [libraryView, setLibraryView] = useState<'local' | 'server'>('local');
   const [onThisMac, setOnThisMac] = useState(true);
+  const [externalImportOpen, setExternalImportOpen] = useState(false);
   const syncing = useRef(false);
   const cachedIds = useRef(new Set<string>());
   const fileInput = useRef<HTMLInputElement>(null);
+  const importRunning = useRef(false);
+  const hasExternal = items.some((item) => item.storage === 'external');
+  const metadataSources = useMemo(() => {
+    const seen = new Set<string>();
+    return selectedKeys.map((key) => resolveSource({ envSources, customAPIs }, key)).filter((source): source is SourceConfig => {
+      if (!source || source.isAdult || source.kind === 'libvio' || seen.has(source.url)
+        || isSourceDisabled({ sourceHealth }, source.key) || isInDisabledSubscription({ subscriptions }, source.key)) return false;
+      seen.add(source.url); return true;
+    });
+  }, [selectedKeys, envSources, customAPIs, sourceHealth, subscriptions]);
 
   const refresh = useCallback(async () => {
     if (!verified) return;
@@ -111,6 +137,12 @@ export default function LibraryIndex() {
   }, [checked, verified, refresh]);
 
   useEffect(() => {
+    if (!verified || !hasExternal) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [verified, hasExternal, refresh]);
+
+  useEffect(() => {
     const readLocation = () => {
       const params = new URLSearchParams(window.location.search);
       const kind = params.get('kind');
@@ -149,6 +181,7 @@ export default function LibraryIndex() {
   const tvCount = collections.filter(({ entry }) => entry.kind === 'tv').length;
 
   const chooseFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    if (importRunning.current || directoryImport) return;
     const files = Array.from(event.target.files || []);
     event.target.value = '';
     if (!files.length) return;
@@ -157,28 +190,43 @@ export default function LibraryIndex() {
     setImportItems(accepted.map((file) => ({ file, metadata: guessLibraryMetadata(file.name), progress: 0, state: 'ready' })));
   };
 
+  const openImport = () => {
+    if (directoryImport) setExternalImportOpen(true);
+    else fileInput.current?.click();
+  };
+
   const updateImport = (index: number, metadata: Partial<LibraryMetadata>) => {
     setImportItems((current) => current.map((item, at) => at === index ? { ...item, metadata: { ...item.metadata, ...metadata } } : item));
   };
 
   const startImport = async () => {
+    if (importRunning.current) return;
+    importRunning.current = true;
     setImporting(true);
     setImportError('');
-    for (let index = 0; index < importItems.length; index++) {
-      const item = importItems[index];
-      if (item.state === 'done') continue;
-      setImportItems((current) => current.map((row, at) => at === index ? { ...row, state: 'uploading', progress: 0, error: undefined } : row));
-      try {
-        await importLibraryFile(item.file, item.metadata, (progress) => {
-          setImportItems((current) => current.map((row, at) => at === index ? { ...row, progress } : row));
-        });
-        setImportItems((current) => current.map((row, at) => at === index ? { ...row, progress: 100, state: 'done' } : row));
-      } catch (cause) {
-        setImportItems((current) => current.map((row, at) => at === index ? { ...row, state: 'error', error: cause instanceof Error ? cause.message : '导入失败' } : row));
+    try {
+      for (let index = 0; index < importItems.length; index++) {
+        const item = importItems[index];
+        if (item.state === 'done') continue;
+        setImportItems((current) => current.map((row, at) => at === index ? { ...row, state: 'matching', progress: 0, error: undefined } : row));
+        try {
+          const match = await matchLibraryMetadata(item.metadata, metadataSources)
+            .catch(() => ({ status: 'unavailable' as const, metadata: item.metadata }));
+          const metadata = match.status === 'matched' ? {
+            ...match.metadata, description: item.metadata.description || match.metadata.description,
+            coverUrl: item.metadata.coverUrl || match.metadata.coverUrl,
+          } : item.metadata;
+          setImportItems((current) => current.map((row, at) => at === index ? { ...row, metadata, metadataStatus: match.status, state: 'uploading' } : row));
+          await importLibraryFile(item.file, metadata, (progress) => {
+            setImportItems((current) => current.map((row, at) => at === index ? { ...row, progress } : row));
+          });
+          setImportItems((current) => current.map((row, at) => at === index ? { ...row, progress: 100, state: 'done' } : row));
+        } catch (cause) {
+          setImportItems((current) => current.map((row, at) => at === index ? { ...row, state: 'error', error: cause instanceof Error ? cause.message : '导入失败' } : row));
+        }
       }
-    }
-    await refresh();
-    setImporting(false);
+      await refresh();
+    } finally { importRunning.current = false; setImporting(false); }
   };
 
   return (
@@ -191,13 +239,16 @@ export default function LibraryIndex() {
           </div>
           <div className={styles.heroAside}>
             <span className={styles.localBadge}><span /> {libraryView === 'server' ? syncStatus?.online ? '已连接' : '未连接' : onThisMac ? '本机' : '服务器'}</span>
-            {verified && enabled && libraryView === 'local' && <button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入视频</button>}
+            {verified && enabled && libraryView === 'local' && <>
+              {items.length > 0 && <LibraryMetadataCompletion entries={items} sources={metadataSources} disabled={importing} onUpdated={refresh} />}
+              <button className={styles.primaryButton} disabled={importing} onClick={openImport}><LibraryIcon name={directoryImport ? 'folder' : 'upload'} />导入视频</button>
+            </>}
           </div>
         </section>
 
         {verified && syncStatus?.enabled && <nav className={styles.locationTabs} aria-label="片库存储位置"><button aria-pressed={libraryView === 'local'} className={libraryView === 'local' ? styles.activeLocation : ''} onClick={() => setLibraryView('local')}>本地</button><button aria-pressed={libraryView === 'server'} className={libraryView === 'server' ? styles.activeLocation : ''} onClick={() => setLibraryView('server')}>服务器片库</button></nav>}
 
-        <input className={styles.fileInput} ref={fileInput} type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/webm,video/quicktime" multiple onChange={chooseFiles} aria-label="选择要导入本地库的视频" />
+        <input className={styles.fileInput} ref={fileInput} type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/webm,video/quicktime" multiple disabled={importing || directoryImport} onChange={chooseFiles} aria-label="选择要导入本地库的视频" />
 
         {!checked || (verified && loading) ? (
           <div className={styles.loading} role="status"><span />正在打开你的影视库…</div>
@@ -231,15 +282,15 @@ export default function LibraryIndex() {
                 <div className={styles.collectionTools}><label className={styles.searchBox}><LibraryIcon name="search" /><input type="search" aria-label="搜索本地片名" placeholder="搜索影片" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select className={styles.sortSelect} aria-label="片库排序" value={sort} onChange={(event) => setSort(event.target.value as 'added' | 'title')}><option value="added">最近入库</option><option value="title">片名排序</option></select></div>
               </div>
 
-              {items.length === 0 ? <StatePanel icon="film" title="暂无影片" description=""><button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入视频</button><Link className={styles.secondaryButton} href="/">发现影片<LibraryIcon name="arrow" className={styles.forwardArrow} /></Link></StatePanel> : shown.length === 0 ? <StatePanel icon="search" title={query ? `未找到“${query}”` : `暂无${filter === 'tv' ? '电视剧' : '电影'}`} description="" /> : <div className={styles.posterGrid}>{shown.map(({ id, entry, episodes }) => {
+              {items.length === 0 ? <StatePanel icon="film" title="暂无影片" description=""><button className={styles.primaryButton} onClick={openImport}><LibraryIcon name={directoryImport ? 'folder' : 'upload'} />导入视频</button><Link className={styles.secondaryButton} href="/">发现影片<LibraryIcon name="arrow" className={styles.forwardArrow} /></Link></StatePanel> : shown.length === 0 ? <StatePanel icon="search" title={query ? `未找到“${query}”` : `暂无${filter === 'tv' ? '电视剧' : '电影'}`} description="" /> : <div className={styles.posterGrid}>{shown.map(({ id, entry, episodes }) => {
                 const resume = [...episodes].filter(unfinished).sort((a, b) => (b.lastPlayedAt || '').localeCompare(a.lastPlayedAt || ''))[0];
                 const target = resume || episodes[0];
                 return <button key={id} className={styles.movieCard} onClick={() => selectEntry(target.id)} aria-label={`${resume ? '继续观看' : '播放'} ${entry.title}${entry.kind === 'tv' ? `，已存 ${episodes.length} 集` : ''}`}>
-                  <div className={styles.posterWrap}><Poster entry={entry} /><span className={styles.formatBadge}>{entry.kind === 'tv' ? `${episodes.length} 集已存` : '已保存'}</span><div className={styles.posterHover}><span className={styles.posterPlay}><LibraryIcon name="play" /></span><span>{resume ? '继续观看' : '立即播放'}</span></div>{percentPlayed(target) > 0 && <div className={styles.cardProgress}><i style={{ width: `${percentPlayed(target)}%` }} /></div>}</div>
+                  <div className={styles.posterWrap}><Poster entry={entry} /><span className={styles.formatBadge}>{target.available === false ? target.availabilityReason === 'offline' ? '硬盘未连接' : target.availabilityReason === 'changed' ? '文件已变更' : '暂不可用' : target.storage === 'external' ? '外部文件' : entry.kind === 'tv' ? `${episodes.length} 集已存` : '已保存'}</span><div className={styles.posterHover}><span className={styles.posterPlay}><LibraryIcon name="play" /></span><span>{target.available === false ? '查看影片' : resume ? '继续观看' : '立即播放'}</span></div>{percentPlayed(target) > 0 && <div className={styles.cardProgress}><i style={{ width: `${percentPlayed(target)}%` }} /></div>}</div>
                   <strong className={styles.movieTitle}>{entry.title}</strong><span className={styles.movieMeta}>{entry.year && `${entry.year} · `}{entry.kind === 'tv' ? `${new Set(episodes.map((episode) => episode.seasonNumber || 1)).size} 季 · 电视剧` : sizeLabel(entry.bytes)}{entry.kind === 'movie' && percentPlayed(entry) >= 98 ? ' · 已看完' : ''}</span>
                 </button>;
               })}</div>}
-              {items.length > 0 && <p className={styles.libraryFootnote}><LibraryIcon name="folder" /><span>{movieCount} 部电影，{tvCount} 部电视剧 · 共 {items.length} 个视频 · {sizeLabel(items.reduce((sum, item) => sum + item.bytes, 0))}</span></p>}
+              {items.length > 0 && <p className={styles.libraryFootnote}><LibraryIcon name="folder" /><span>{movieCount} 部电影，{tvCount} 部电视剧 · 共 {items.length} 个视频 · 视频总大小 {sizeLabel(items.reduce((sum, item) => sum + item.bytes, 0))}</span></p>}
             </section>
             </>}
           </>
@@ -248,7 +299,8 @@ export default function LibraryIndex() {
         {importError && importItems.length === 0 && <p role="alert" className={styles.errorBanner}>{importError}</p>}
       </main>
 
-      {importItems.length > 0 && <ImportDialog items={importItems} importing={importing} error={importError} onChange={updateImport} onStart={() => void startImport()} onClose={() => setImportItems([])} />}
+      {!directoryImport && importItems.length > 0 && <ImportDialog items={importItems} importing={importing} error={importError} onChange={updateImport} onStart={() => void startImport()} onClose={() => setImportItems([])} />}
+      {directoryImport && <ExternalLibraryDialog open={externalImportOpen} onClose={() => setExternalImportOpen(false)} sources={metadataSources} onUpdated={refresh} />}
     </div>
   );
 }
@@ -286,11 +338,13 @@ function ImportDialog({ items, importing, error, onChange, onStart, onClose }: {
       {error && <p className={styles.errorBanner} role="alert">{error}</p>}
       <div className={styles.importList}>{items.map((item, index) => <div key={`${item.file.name}-${index}`} className={styles.importRow}>
         <div className={styles.importFile}><LibraryIcon name={item.state === 'done' ? 'check' : 'film'} /><span title={item.file.name}>{item.file.name}</span><small>{sizeLabel(item.file.size)}</small></div>
-        <div className={styles.importFields}><label className={styles.titleField}>片名<input aria-label={`${item.file.name} 的片名`} value={item.metadata.title} maxLength={200} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { title: event.target.value })} /></label><label>分类<select aria-label={`${item.file.name} 的分类`} value={item.metadata.kind} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { kind: event.target.value as LibraryKind, ...(event.target.value === 'tv' ? { seasonNumber: item.metadata.seasonNumber || 1, episodeNumber: item.metadata.episodeNumber || index + 1 } : {}) })}><option value="movie">电影</option><option value="tv">电视剧</option></select></label>{item.metadata.kind === 'tv' && <><label className={styles.numberField}>季<input type="number" min="1" max="999" aria-label={`${item.file.name} 的季数`} value={item.metadata.seasonNumber || 1} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { seasonNumber: Math.max(1, Number(event.target.value) || 1) })} /></label><label className={styles.numberField}>集<input type="number" min="1" max="9999" aria-label={`${item.file.name} 的集数`} value={item.metadata.episodeNumber || index + 1} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { episodeNumber: Math.max(1, Number(event.target.value) || 1) })} /></label></>}</div>
+        <div className={styles.importFields}><label className={styles.titleField}>片名<input aria-label={`${item.file.name} 的片名`} value={item.metadata.title} maxLength={200} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { title: event.target.value })} /></label><label className={styles.numberField}>年份<input aria-label={`${item.file.name} 的年份`} inputMode="numeric" value={item.metadata.year || ''} maxLength={4} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { year: event.target.value.replace(/\D/g, '').slice(0, 4) || undefined })} /></label><label>分类<select aria-label={`${item.file.name} 的分类`} value={item.metadata.kind} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { kind: event.target.value as LibraryKind, ...(event.target.value === 'tv' ? { seasonNumber: item.metadata.seasonNumber || 1, episodeNumber: item.metadata.episodeNumber || index + 1 } : {}) })}><option value="movie">电影</option><option value="tv">电视剧</option></select></label>{item.metadata.kind === 'tv' && <><label className={styles.numberField}>季<input type="number" min="1" max="999" aria-label={`${item.file.name} 的季数`} value={item.metadata.seasonNumber || 1} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { seasonNumber: Math.max(1, Number(event.target.value) || 1) })} /></label><label className={styles.numberField}>集<input type="number" min="1" max="9999" aria-label={`${item.file.name} 的集数`} value={item.metadata.episodeNumber || index + 1} disabled={importing || item.state === 'done'} onChange={(event) => onChange(index, { episodeNumber: Math.max(1, Number(event.target.value) || 1) })} /></label></>}</div>
+        {item.state === 'matching' && <p className={styles.metadataStatus} role="status">匹配资料…</p>}
         {(item.state === 'uploading' || item.state === 'done') && <div className={styles.importProgress}><div className={styles.progressTrack}><i style={{ width: `${item.progress}%` }} /></div><span>{item.state === 'done' ? '已入库' : `${Math.round(item.progress)}%`}</span></div>}
+        {item.metadataStatus && item.metadataStatus !== 'matched' && <p className={styles.metadataStatus}>{item.metadataStatus === 'ambiguous' ? '同名资料未确认' : '资料未匹配'}</p>}
         {item.error && <p className={styles.importRowError} role="alert">{item.error}</p>}
       </div>)}</div>
-      <div className={styles.dialogFooter}><span>{items.filter((item) => item.state === 'done').length} / {items.length} 个视频已入库</span>{done ? <button className={styles.primaryButton} onClick={onClose}>打开片库<LibraryIcon name="arrow" className={styles.forwardArrow} /></button> : <button className={styles.primaryButton} disabled={importing || items.some((item) => !item.metadata.title.trim())} onClick={onStart}><LibraryIcon name="upload" />{importing ? '导入中…' : items.some((item) => item.state === 'error') ? '重试' : '确认导入'}</button>}</div>
+      <div className={styles.dialogFooter}><span>{importing || done ? `${items.filter((item) => item.state === 'done').length} / ${items.length} 个视频已入库` : '复制到当前片库，原文件保留'}</span>{done ? <button className={styles.primaryButton} onClick={onClose}>打开片库<LibraryIcon name="arrow" className={styles.forwardArrow} /></button> : <button className={styles.primaryButton} disabled={importing || items.some((item) => !item.metadata.title.trim())} onClick={onStart}><LibraryIcon name="upload" />{importing ? '导入中…' : items.some((item) => item.state === 'error') ? '重试' : '复制入库'}</button>}</div>
     </div>
   </div>;
 }

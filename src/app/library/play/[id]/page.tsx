@@ -50,6 +50,12 @@ export default function LibraryPlaybackPage() {
   }, [checked, verified, refresh]);
 
   const entry = items.find((item) => item.id === id);
+  const externalEntry = entry?.storage === 'external';
+  useEffect(() => {
+    if (!verified || !externalEntry) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [verified, externalEntry, refresh]);
   const episodes = useMemo(() => entry?.kind === 'tv'
     ? orderedEpisodes(items.filter((item) => item.kind === 'tv' && item.groupId === entry.groupId))
     : entry ? [entry] : [], [entry, items]);
@@ -73,7 +79,7 @@ export default function LibraryPlaybackPage() {
             : !entry ? <div className={styles.statePanel}><span className={styles.stateIcon}><LibraryIcon name="film" /></span><h1>{error ? '暂时无法打开影片' : '影片不在当前片库中'}</h1>{error && <p role="alert">{error}</p>}<div className={styles.stateActions}><button className={styles.secondaryButton} onClick={() => void refresh()}>重新读取</button><Link href="/library" className={styles.secondaryButton}>返回片库</Link></div></div>
               : <>
                 {error && <div className={styles.errorBanner} role="status">{error}<button onClick={() => void refresh()}>重试</button></div>}
-                <LibraryPlayer key={entry.id} entry={entry} episodes={episodes} onSelect={selectEntry} onProgress={updateProgress} />
+                <LibraryPlayer key={entry.id} entry={entry} episodes={episodes} onSelect={selectEntry} onProgress={updateProgress} onRefresh={refresh} />
               </>}
     </main>
   </div>;

@@ -21,6 +21,10 @@ export interface LibraryEntry extends Omit<LibraryMetadata, 'coverUrl'> {
   createdAt: string;
   mediaUrl: string;
   posterUrl: string;
+  hasPoster?: boolean;
+  storage?: 'managed' | 'external';
+  available?: boolean;
+  availabilityReason?: 'offline' | 'changed' | 'unavailable';
   position?: number;
   duration?: number;
   lastPlayedAt?: string;

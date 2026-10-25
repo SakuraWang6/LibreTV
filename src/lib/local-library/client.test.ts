@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanupInterruptedLibraryUploads, createLibrarySaveTarget, fetchLibrary, guessLibraryMetadata, importLibraryFile } from './client';
+import { cleanupInterruptedLibraryUploads, createLibrarySaveTarget, fetchLibrary, guessLibraryMetadata, importLibraryFile, updateLibraryMetadata } from './client';
 import { LOCAL_LIBRARY_UPDATED_EVENT } from './types';
 
 const metadata = { title: '测试电影', kind: 'movie' as const };
@@ -320,5 +320,40 @@ describe('guessLibraryMetadata', () => {
     ['长安十二时辰 第3集.mp4', { title: '长安十二时辰', kind: 'tv', seasonNumber: 1, episodeNumber: 3 }],
     ['电影名字.mp4', { title: '电影名字', kind: 'movie' }],
     ['/a/b/影片名称.M4V', { title: '影片名称', kind: 'movie' }],
+    ['教父 1972.mp4', { title: '教父', year: '1972', kind: 'movie' }],
+    ['教父2 1974.mp4', { title: '教父2', year: '1974', kind: 'movie' }],
+    ['教父3 (1990).mp4', { title: '教父3', year: '1990', kind: 'movie' }],
+    ['影片【2020】.mp4', { title: '影片', year: '2020', kind: 'movie' }],
+    ['Some.Show.2019.S02E13.mp4', { title: 'Some Show', year: '2019', kind: 'tv', seasonNumber: 2, episodeNumber: 13 }],
+    ['1917.mp4', { title: '1917', kind: 'movie' }],
+    ['1984.mp4', { title: '1984', kind: 'movie' }],
+    ['2001太空漫游.mp4', { title: '2001太空漫游', kind: 'movie' }],
   ])('recognizes %s', (name, expected) => expect(guessLibraryMetadata(name)).toEqual(expected));
+});
+
+describe('updateLibraryMetadata', () => {
+  it('sends only metadata to its own route and refreshes the library after confirmation', async () => {
+    const events = new EventTarget();
+    vi.stubGlobal('window', events);
+    const changed = vi.fn();
+    events.addEventListener(LOCAL_LIBRARY_UPDATED_EVENT, changed);
+    const item = { ...metadata, id: 'movie-1' };
+    const request = vi.fn().mockResolvedValue(json({ item }));
+    vi.stubGlobal('fetch', request);
+    await expect(updateLibraryMetadata('movie-1', metadata)).resolves.toEqual(item);
+    expect(request).toHaveBeenCalledWith('/api/library/movie-1/metadata', expect.objectContaining({
+      method: 'PATCH', body: JSON.stringify({ metadata }),
+    }));
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not announce an update when the server did not confirm a saved item', async () => {
+    const events = new EventTarget();
+    vi.stubGlobal('window', events);
+    const changed = vi.fn();
+    events.addEventListener(LOCAL_LIBRARY_UPDATED_EVENT, changed);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({})));
+    await expect(updateLibraryMetadata('movie-1', metadata)).rejects.toThrow('未确认');
+    expect(changed).not.toHaveBeenCalled();
+  });
 });

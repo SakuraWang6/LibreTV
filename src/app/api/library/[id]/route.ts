@@ -3,5 +3,5 @@ import { libraryRoute, readLibraryJson, updateProgress } from '@/lib/local-libra
 export const runtime = 'nodejs';
 
 export function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  return libraryRoute(request, true, async () => updateProgress((await context.params).id, await readLibraryJson(request)));
+  return libraryRoute(request, true, async () => updateProgress((await context.params).id, await readLibraryJson(request), request));
 }

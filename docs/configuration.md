@@ -22,7 +22,7 @@ Mac 配置由 Bash `source`，密码、JSON 和含空格的路径使用单引号
 | `PROXY_SECRET` | 从密码派生 | 会话与代理签名密钥，多实例应使用一致的值 |
 | `COOKIE_SECURE` | 根据 `x-forwarded-proto` 推导 | `true` / `false`，控制登录 Cookie 的 Secure 标记；公网 HTTPS 设置为 `true` |
 | `PUBLIC_ORIGIN` | 由请求 URL 与 Host 推导 | 片库写请求的公开来源，如 `https://media.example.com`；Mac 本机免登录不能同时设置 |
-| `LOCAL_AUTH_BYPASS` | 关闭 | `true` 仅供 Mac 启动器固定监听 `127.0.0.1:8899` 的网页服务使用；公网和直接 `npm start` 不因此免登录 |
+| `LOCAL_AUTH_BYPASS` | 关闭 | `true` 仅供 Mac 启动器固定监听 `127.0.0.1:8899` 的网页服务使用，也是媒体目录索引的启用条件；公网和直接 `npm start` 不因此免登录 |
 | `DEFAULT_SOURCES` | `[]` | 点播源 JSON 数组 |
 | `DEFAULT_LIVE_SOURCES` | `[]` | 直播源 JSON 数组，可带 `epg` |
 | `DEFAULT_SUBSCRIPTIONS` | 无 | 预置订阅 JSON 数组，格式见片源文档 |
@@ -60,14 +60,14 @@ DEFAULT_SOURCES='[{"name":"LIBVIO","url":"https://libvio.host","kind":"libvio"}]
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `LOCAL_LIBRARY_DIR` | 通用部署关闭；Mac 为仓库 `.local/library`；片库 Compose 为 `/data/library` | 片库绝对路径，保存视频、海报、进度、队列及同步映射 |
+| `LOCAL_LIBRARY_DIR` | 通用部署关闭；Mac 为仓库 `.local/library`；片库 Compose 为 `/data/library` | 管理片库的绝对路径，保存库内视频、海报、进度、队列及同步映射；硬盘目录索引只保存引用与资料，原片留在外盘 |
 | `BACKGROUND_DOWNLOADS_ENABLED` | 启用片库时开启 | `0` 关闭后台下载；Compose 部署还应停用对应 `downloads` 服务 |
 | `BACKGROUND_DOWNLOAD_MAX_GB` | `20` GiB | 单任务上限，限制为 0.1–200 GiB；仍需足够临时空间和 512 MiB 剩余空间 |
 | `FFMPEG_PATH` | `ffmpeg`；Docker 为 `/usr/bin/ffmpeg` | 整理视频所用 FFmpeg 可执行文件 |
 | `BACKGROUND_DOWNLOAD_DOH_URL` | 不使用额外 DoH | 可选的公网 HTTPS DNS JSON 接口，需配套 bootstrap |
 | `BACKGROUND_DOWNLOAD_DOH_BOOTSTRAP` | 无 | DoH 服务器的公网 IP，逗号分隔，最多 8 个；保留 HTTPS 证书与下载地址校验 |
 
-变更片库位置前先停止服务，完整迁移整个目录，包含 `.libretv` 元数据。不要只搬视频或删除队列目录；暂停任务的分片和断点仍用于恢复。
+变更片库位置前先停止服务，完整迁移整个目录，包含 `.libretv` 元数据。不要只搬视频或删除队列目录；暂停任务的分片和断点仍用于恢复。外部原片不包含在这个库目录中，须另行备份。
 
 ## 服务器片库同步
 
@@ -89,7 +89,7 @@ DEFAULT_SOURCES='[{"name":"LIBVIO","url":"https://libvio.host","kind":"libvio"}]
 | `LIBVIO_BROWSER_PROFILE` | `.local/libvio-browser-profile` | LIBVIO 专用 Chrome 资料目录 |
 | `QUARK_RUNTIME_DIR` | 不启用夸克 | 已准备、校验通过的夸克运行目录绝对路径 |
 
-LIBVIO 需要已安装的 Google Chrome；夸克接口还要求本机免登录模式。准备与授权分别见 [浏览器桥](../scripts/libvio-browser/README.md) 和 [夸克](quark.md)。不要迁移或公开资料目录中的凭据。
+LIBVIO 需要已安装的 Google Chrome；媒体目录索引和夸克接口还要求本机免登录模式。目录通过页面显式选择或填写路径后登记，没有额外的目录环境变量。准备与授权分别见 [Mac 说明](macos.md)、[浏览器桥](../scripts/libvio-browser/README.md) 和 [夸克](quark.md)。不要迁移或公开资料目录中的凭据。
 
 ## Compose 与内部变量
 

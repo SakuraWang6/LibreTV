@@ -4,19 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import type { LibraryEntry } from '@/lib/local-library/types';
+import { canAdoptLibraryProgressVersion } from '@/lib/local-library/progress-version';
 import { PlaybackSourcePicker } from '@/components/switch-source';
 import { useToast } from '@/components/toast';
 import { buildPlaybackSwitchUrl, matchPlaybackEpisode, type PlaybackSelection } from '@/lib/playback-source';
 import { LibraryIcon, episodeLabel, percentPlayed, plainDescription, timeLabel, unfinished } from './library-ui';
 import styles from './library.module.css';
 
-export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry: LibraryEntry; episodes: LibraryEntry[]; onSelect: (id: string) => void; onProgress: (id: string, position: number, duration: number) => void }) {
+export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh }: { entry: LibraryEntry; episodes: LibraryEntry[]; onSelect: (id: string) => void; onProgress: (id: string, position: number, duration: number) => void; onRefresh: () => Promise<void> }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const video = useRef<HTMLVideoElement>(null);
   const playback = useRef({ loaded: false, position: 0, duration: 0 });
   const lastSaved = useRef({ position: entry.position || 0, duration: entry.duration || 0, sequence: 0 });
+  const confirmedProgressVersion = useRef(entry.lastPlayedAt);
   const savesInFlight = useRef(new Map<number, string>());
   const saveRequested = useRef(false);
   const saveSequence = useRef(0);
@@ -25,6 +27,11 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
   const [saveError, setSaveError] = useState(false);
   const [ended, setEnded] = useState(false);
   const [season, setSeason] = useState(entry.seasonNumber || 1);
+  const [checkingFile, setCheckingFile] = useState(false);
+  const checking = useRef(false);
+  const unavailable = entry.available === false;
+  const unavailableMessage = entry.availabilityReason === 'offline' ? '硬盘未连接'
+    : entry.availabilityReason === 'changed' ? '文件已变更，请重新扫描媒体目录' : '视频文件暂不可用';
   const currentIndex = episodes.findIndex((item) => item.id === entry.id);
   const previous = episodes[currentIndex - 1];
   const next = episodes[currentIndex + 1];
@@ -50,8 +57,14 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
       // All writes are small. Keep an already in-flight final snapshot alive when the window closes.
       body: JSON.stringify({ position, duration }), keepalive: true,
-    }).then((response) => {
+    }).then(async (response) => {
       succeeded = response.ok;
+      if (response.ok) {
+        const payload = await response.json().catch(() => undefined) as { item?: { lastPlayedAt?: unknown } } | undefined;
+        const version = payload?.item?.lastPlayedAt;
+        if (typeof version === 'string' && Number.isFinite(Date.parse(version))
+          && canAdoptLibraryProgressVersion(version, confirmedProgressVersion.current)) confirmedProgressVersion.current = version;
+      }
       if (response.ok && sequence >= lastSaved.current.sequence) lastSaved.current = { position, duration, sequence };
       if (!keepalive) setSaveError(!response.ok);
     }).catch(() => { if (!keepalive) setSaveError(true); }).finally(() => {
@@ -66,6 +79,18 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
   useEffect(() => { latestSave.current = save; }, [save]);
 
   useEffect(() => {
+    if (entry.available === false) { save(true); playback.current.loaded = false; setEnded(false); }
+    else setPlayError('');
+  }, [entry.available, entry.mediaUrl, save]);
+
+  const checkFile = useCallback(async () => {
+    if (checking.current) return;
+    checking.current = true; setCheckingFile(true);
+    try { await onRefresh(); }
+    finally { checking.current = false; setCheckingFile(false); }
+  }, [onRefresh]);
+
+  useEffect(() => {
     const media = video.current;
     const state = playback.current;
     const incoming = entry.position || 0;
@@ -74,6 +99,8 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
     // Preserve unsaved local work. A clean, paused player can adopt progress
     // received from a disk refresh without treating the remote seek as new viewing.
     if (state.position !== lastSaved.current.position || state.duration !== lastSaved.current.duration) return;
+    if (!canAdoptLibraryProgressVersion(entry.lastPlayedAt, confirmedProgressVersion.current)) return;
+    if (entry.lastPlayedAt && Number.isFinite(Date.parse(entry.lastPlayedAt))) confirmedProgressVersion.current = entry.lastPlayedAt;
     const target = Math.max(0, Math.min(incoming, media.duration));
     if (Math.abs(target - media.currentTime) <= 1) return;
     media.currentTime = target;
@@ -130,10 +157,14 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
   return <div className={styles.playerLayout}>
     <div className={styles.playerMain}>
       <div className={styles.videoFrame}>
-        <video ref={video} className={styles.video} src={entry.mediaUrl} controls autoPlay playsInline preload="metadata" tabIndex={0}
+        {!unavailable && <video ref={video} className={styles.video} src={entry.mediaUrl} controls autoPlay playsInline preload="metadata" tabIndex={0}
           onLoadedMetadata={(event) => {
             const media = event.currentTarget;
-            const saved = entry.position || 0;
+            // Reconnecting an external disk creates a new video element. A
+            // delayed catalog snapshot cannot reset its acknowledged position.
+            const currentVersion = canAdoptLibraryProgressVersion(entry.lastPlayedAt, confirmedProgressVersion.current);
+            const saved = currentVersion ? entry.position || 0 : lastSaved.current.position;
+            if (currentVersion && entry.lastPlayedAt && Number.isFinite(Date.parse(entry.lastPlayedAt))) confirmedProgressVersion.current = entry.lastPlayedAt;
             if (saved > 0 && saved < media.duration - 5) media.currentTime = saved;
             playback.current.loaded = true;
             syncPlayback(media);
@@ -144,14 +175,22 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
           onSeeked={(event) => { syncPlayback(event.currentTarget); save(); }}
           onEnded={(event) => { syncPlayback(event.currentTarget); save(); setEnded(true); }}
           onPlaying={() => { setEnded(false); setPlayError(''); }}
-          onError={() => setPlayError('此格式无法播放')}
-          aria-label={`${entry.title} ${entry.kind === 'tv' ? episodeLabel(entry) : ''}`} />
-        {playError && <div className={styles.videoMessage} role="alert"><LibraryIcon name="film" /><p>{playError}</p><a href={downloadUrl} download className={styles.secondaryButton}>保存视频到设备</a></div>}
-        {ended && next && <div className={styles.endedMessage}><p>本集已播放完</p><button className={styles.primaryButton} onClick={() => onSelect(next.id)}><LibraryIcon name="next" />播放下一集</button></div>}
+          onError={(event) => {
+            // MEDIA_ERR_DECODE / MEDIA_ERR_SRC_NOT_SUPPORTED indicate a
+            // format problem when the external-file availability remains good.
+            const code = event.currentTarget.error?.code;
+            const formatError = code === 3 || code === 4;
+            setPlayError(entry.storage === 'external' && !formatError ? '视频文件暂不可用' : '此格式无法播放');
+            if (entry.storage === 'external') void checkFile();
+          }}
+          aria-label={`${entry.title} ${entry.kind === 'tv' ? episodeLabel(entry) : ''}`} />}
+        {unavailable ? <div className={styles.videoMessage} role="status"><LibraryIcon name="folder" /><p>{unavailableMessage}</p><button type="button" className={styles.secondaryButton} disabled={checkingFile} onClick={() => void checkFile()}>{checkingFile ? '检查中…' : '重新检查'}</button></div>
+          : playError && <div className={styles.videoMessage} role="alert"><LibraryIcon name="film" /><p>{playError}</p><a href={downloadUrl} download className={styles.secondaryButton}>保存视频到设备</a></div>}
+        {!unavailable && ended && next && <div className={styles.endedMessage}><p>本集已播放完</p><button className={styles.primaryButton} onClick={() => onSelect(next.id)}><LibraryIcon name="next" />播放下一集</button></div>}
       </div>
       <div className={styles.playbackBar}>
         {entry.kind === 'tv' && <div><button disabled={!previous} onClick={() => previous && onSelect(previous.id)}><LibraryIcon name="previous" />上一集</button><button disabled={!next} onClick={() => next && onSelect(next.id)}>下一集<LibraryIcon name="next" /></button></div>}
-        <a href={downloadUrl} download className={styles.secondaryButton} title="Files / VLC 中的播放进度不会同步"><LibraryIcon name="folder" />保存视频到设备</a>
+        {!unavailable && <a href={downloadUrl} download className={styles.secondaryButton} title="Files / VLC 中的播放进度不会同步"><LibraryIcon name="folder" />保存视频到设备</a>}
       </div>
       {saveError && <p className={styles.progressError} role="status">进度保存失败</p>}
     </div>

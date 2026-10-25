@@ -2,6 +2,7 @@
 
 import type { SaveTarget } from '../download-saver';
 import { LOCAL_LIBRARY_UPDATED_EVENT, type LibraryEntry, type LibraryMetadata, type LibraryResponse } from './types';
+export { guessLibraryMetadata } from './filename';
 
 type LibraryFormat = 'MP4' | 'TS' | 'WEBM' | 'MOV';
 const UPLOAD_CHUNK_BYTES = 1024 * 1024;
@@ -275,15 +276,11 @@ export async function importLibraryFile(
   }
 }
 
-export function guessLibraryMetadata(filename: string): LibraryMetadata {
-  const basename = filename.replace(/^.*[/\\]/, '').replace(/\.(mp4|m4v|webm|mov|ts|mkv|avi)$/i, '');
-  const episode = /(?:^|[\s._-])S(\d{1,2})[\s._-]*E(\d{1,3})(?=$|[\s._-])/i.exec(basename)
-    ?? /S(\d{1,2})E(\d{1,3})/i.exec(basename);
-  const chineseEpisode = /第\s*(\d+)\s*[集话]/.exec(basename);
-  const markerIndex = episode?.index ?? chineseEpisode?.index;
-  const rawTitle = markerIndex !== undefined ? basename.slice(0, markerIndex) : basename;
-  const title = rawTitle.replace(/[._]/g, ' ').replace(/[-\s]+$/, '').trim() || basename;
-  if (episode) return { title, kind: 'tv', seasonNumber: Number(episode[1]) || 1, episodeNumber: Number(episode[2]) || 1 };
-  if (chineseEpisode) return { title, kind: 'tv', seasonNumber: 1, episodeNumber: Number(chineseEpisode[1]) || 1 };
-  return { title, kind: 'movie' };
+export async function updateLibraryMetadata(id: string, metadata: LibraryMetadata): Promise<LibraryEntry> {
+  const result = await libraryRequest<{ item: LibraryEntry }>(`/api/library/${encodeURIComponent(id)}/metadata`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ metadata }),
+  });
+  if (!result.item?.id) throw new Error('影视库未确认资料更新');
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(LOCAL_LIBRARY_UPDATED_EVENT));
+  return result.item;
 }

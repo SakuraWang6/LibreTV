@@ -4,5 +4,5 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export function GET(request: Request) {
-  return libraryRoute(request, false, listLibrary);
+  return libraryRoute(request, false, () => listLibrary(request));
 }
