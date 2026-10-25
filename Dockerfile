@@ -22,8 +22,14 @@ ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
+# Optional regional Alpine mirror; apk still verifies the repository signatures.
+ARG ALPINE_MIRROR
 # Web and the independent download worker share this image and a persistent volume.
-RUN apk add --no-cache ffmpeg && mkdir -p /data/library && chown -R node:node /data
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+      sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR%/}|g" /etc/apk/repositories; \
+    fi \
+    && apk add --no-cache ffmpeg \
+    && mkdir -p /data/library && chown -R node:node /data
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
