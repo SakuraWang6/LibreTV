@@ -7,6 +7,7 @@ import { migrateSkipMarks, type SkipMark, type SkipSegment } from './skip-marks'
 import { isQualityEntryFresh, mergeQualityEntries, qualityKey } from './quality';
 import { clearLiveProbeResultsDb, loadLiveProbeResults, saveLiveProbeResults } from './db';
 import { PERSIST_KEY, createThrottledStorage } from './persist-storage';
+import { isLibvioSource } from './providers/libvio/source';
 
 /**
  * 全局设置（zustand + localStorage 持久化）。
@@ -854,9 +855,11 @@ export const useAppStore = create<AppState>()(
       // v8：订阅新增 refreshDays / failStreak——两者都缺省即「纯手动 + 无失败记录」，
       //     与旧行为完全一致，因此无需改写存量数据，仅借版本号让 migrate 跑一遍。
       // 此前未声明 version 的存量数据会被视为 v0 并走 migrate 补齐。
-      version: 8,
+      // v9: re-probe old height-only snapshots once so cropped 4K gains its width.
+      version: 9,
       migrate: (persisted, version) => {
         const state = { ...((persisted ?? {}) as Partial<AppState>) };
+        if (version < 9) state.qualityMap = {};
         if (!Array.isArray(state.liveRecent)) state.liveRecent = [];
         if (!Array.isArray(state.liveSubscriptions)) state.liveSubscriptions = [];
 
@@ -974,13 +977,14 @@ export async function hydrateLiveProbeResults(): Promise<void> {
 export function resolveSource(
   store: Pick<AppState, 'customAPIs' | 'envSources'>,
   key: string,
-  fallback?: { url?: string; detail?: string; name?: string }
+  fallback?: { url?: string; detail?: string; name?: string; kind?: SourceConfig['kind']; sourceKind?: SourceConfig['kind'] }
 ): SourceConfig | undefined {
   const found = store.customAPIs.find((a) => a.key === key) ?? store.envSources.find((a) => a.key === key);
   if (found) return found;
   if (fallback?.url) {
     return {
       key,
+      ...((fallback.kind === 'libvio' || fallback.sourceKind === 'libvio' || isLibvioSource({ url: fallback.url })) ? { kind: 'libvio' as const } : {}),
       name: fallback.name || '自定义源',
       url: fallback.url,
       detail: fallback.detail,

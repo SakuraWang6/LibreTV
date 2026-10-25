@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { probeEpisodeOrder, probeQuality } from './quality-probe';
 import type { SourceConfig } from './types';
 
-const mocks = vi.hoisted(() => ({ fetchUpstream: vi.fn() }));
+const mocks = vi.hoisted(() => ({ fetchUpstream: vi.fn(), getLibvioDetail: vi.fn() }));
 vi.mock('./fetch-utils', () => ({ fetchUpstream: mocks.fetchUpstream }));
+vi.mock('./providers/libvio/server', () => ({ getLibvioDetail: mocks.getLibvioDetail }));
 // 探测 대상由用例自己提供，跳过 SSRF 校验（那是 ssrf.test.ts 的职责）
 vi.mock('./ssrf', () => ({ checkUpstreamAllowed: () => Promise.resolve({ ok: true }) }));
 
@@ -210,11 +211,18 @@ describe('probeQuality 降级到分片解析', () => {
 
     const result = await probeQuality({ source: SOURCE, id: '123' });
     expect(result.height).toBe(1080);
+    expect(result.width).toBe(1920);
     // 详情接口 + m3u8，仅此两次：多码率源没有理由再拉分片
     expect(urls()).toEqual([
       'https://api.test/api.php/provide/vod?ac=videolist&ids=123',
       PLAYLIST_URL,
     ]);
+  });
+
+  it('master宽银幕返回声明的真实宽高', async () => {
+    currentPlaylist = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3500000,RESOLUTION=3840x1608\n4k/index.m3u8';
+    mocks.fetchUpstream.mockImplementation((url: string) => Promise.resolve(route(url)));
+    expect(await probeQuality({ source: SOURCE, id: '123' })).toMatchObject({ width: 3840, height: 1608 });
   });
 
   it('单码率 m3u8：下沉到 TS 分片，从 SPS 拿到 1080', async () => {
@@ -223,6 +231,7 @@ describe('probeQuality 降级到分片解析', () => {
 
     const result = await probeQuality({ source: SOURCE, id: '123' });
     expect(result.height).toBe(1080);
+    expect(result.width).toBe(1920);
     // 关键：m3u8 里的 seg0.ts 是相对路径，必须按播放列表地址拼对
     expect(urls()).toContain('https://cdn.test/2024/01/abc/seg0.ts');
   });
@@ -233,6 +242,7 @@ describe('probeQuality 降级到分片解析', () => {
 
     const result = await probeQuality({ source: SOURCE, id: '123' });
     expect(result.height).toBe(1080);
+    expect(result.width).toBe(1920);
     expect(urls()).toContain('https://cdn.test/2024/01/abc/init.mp4');
     expect(urls().some((u) => u.endsWith('.m4s'))).toBe(false);
   });
@@ -277,6 +287,7 @@ seg0.ts
 
     const result = await probeQuality({ source: SOURCE, id: '123' });
     expect(result.height).toBe(1080);
+    expect(result.width).toBe(1920);
   });
 
   it('电视剧单码率：中间集探不出时换最后一集再探', async () => {
@@ -305,6 +316,7 @@ seg0.ts
 
     const result = await probeQuality({ source: SOURCE, id: '123' });
     expect(result.height).toBe(1080);
+    expect(result.width).toBe(1920);
     expect(result.error).toBeUndefined();
     // 两集都请求过：中间集先探，探不到才轮到最后一集
     expect(urls()).toContain(EP2);
@@ -324,5 +336,26 @@ seg0.ts
     const result = await probeQuality({ source: { ...SOURCE, url: 'not-a-url' }, id: '123' });
     expect(result.error).toBeDefined();
     expect(result.height).toBeUndefined();
+  });
+});
+
+describe('LIBVIO quality dispatch', () => {
+  const source: SourceConfig = { key: 'libvio', name: 'LIBVIO', kind: 'libvio', url: 'https://libvio.host' };
+
+  it('only probes provider media URLs without requesting a CMS endpoint', async () => {
+    mocks.fetchUpstream.mockClear();
+    mocks.getLibvioDetail.mockResolvedValue({ episodes: [PLAYLIST_URL], playbackType: 'media' });
+    currentPlaylist = MASTER;
+    mocks.fetchUpstream.mockImplementation((url: string) => Promise.resolve(route(url)));
+    expect(await probeQuality({ source, id: '123' })).toMatchObject({ width: 1920, height: 1080 });
+    expect(mocks.getLibvioDetail).toHaveBeenCalledWith(source, '123', expect.any(AbortSignal));
+    expect(urls()).toEqual([PLAYLIST_URL]);
+  });
+
+  it('keeps a browser-required response as an explanation instead of probing its HTML page', async () => {
+    mocks.fetchUpstream.mockClear();
+    mocks.getLibvioDetail.mockResolvedValue({ episodes: [], playbackType: 'browser-required', message: '请在 LIBVIO 原网页打开' });
+    expect(await probeQuality({ source, id: '123' })).toMatchObject({ error: '请在 LIBVIO 原网页打开' });
+    expect(mocks.fetchUpstream).not.toHaveBeenCalled();
   });
 });

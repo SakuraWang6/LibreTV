@@ -3,6 +3,8 @@ import { guardRequest } from '@/lib/api-guard';
 import { cmsRequestHeaders, parseDetail, parseDetailPageHtml } from '@/lib/cms-parser';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
+import { isLibvioSource } from '@/lib/providers/libvio/source';
+import { getLibvioDetail } from '@/lib/providers/libvio/server';
 import type { SourceConfig, VideoDetail } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -42,6 +44,7 @@ export async function GET(req: Request) {
   }
 
   try {
+    if (isLibvioSource(source)) return NextResponse.json(await getLibvioDetail(source, id, req.signal));
     // 详情页根地址：显式 detail 优先，其次 baseUrl 参数，最后用接口地址的 origin 推导
     // （Apple CMS 的详情页通常与接口同域）。脏 URL 会让 new URL 抛错，由外层 catch 兜底
     const detailRoot = (source.detail || baseUrl || new URL(source.url).origin).replace(/\/+$/, '');

@@ -1,18 +1,33 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import type { DoubanItem } from '@/lib/types';
 import { DoubanCard } from './video-card';
+import { LoadMoreTrigger } from './load-more-trigger';
+import { mergeRecommendations, nextRecommendationPage } from './recommendation-pagination';
 
 const MOVIE_TAGS = ['热门', '最新', '经典', '豆瓣高分', '冷门佳片', '华语', '欧美', '韩国', '日本', '动画'];
 const TV_TAGS = ['热门', '美剧', '英剧', '韩剧', '日剧', '国产剧', '港剧', '日本动画', '综艺', '纪录片'];
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const RECOMMEND_PAGE_SIZE = 24;
+const POSTER_GRID = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-x-4 gap-y-7';
 
-/** 首页推荐区：数据源由设置决定（豆瓣热门 / Bangumi 新番放送 / 影视热榜），二选一展示 */
+function useDoubanPages(type: 'movie' | 'tv', tag: string, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: ['douban-pages', type, tag],
+    queryFn: ({ pageParam, signal }) => api.douban(type, tag, pageParam, RECOMMEND_PAGE_SIZE, signal),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages, lastStart) => nextRecommendationPage(last, pages, lastStart, RECOMMEND_PAGE_SIZE),
+    enabled,
+    staleTime: 300_000,
+  });
+}
+
+/** 首页推荐区：数据源由设置决定。 */
 export function RecommendSection({ onPick }: { onPick: (title: string) => void }) {
   const doubanEnabled = useAppStore((s) => s.doubanEnabled);
   const recommendSource = useAppStore((s) => s.recommendSource);
@@ -23,22 +38,14 @@ export function RecommendSection({ onPick }: { onPick: (title: string) => void }
   return <DoubanView onPick={onPick} />;
 }
 
-/**
- * 豆瓣推荐：影视切换 + 标签筛选。
- * 一次性渲染全部条目：数据本就一次拉全（50 条），卡片图片又是 lazy 加载，
- * 视口外的图不会请求，因此不需要「加载更多」这类本地切片分页来打断浏览。
- */
+/** 豆瓣标签变化会创建独立分页，回到标签时复用已经加载的海报。 */
 function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const [type, setType] = useState<'movie' | 'tv'>('movie');
   const [tag, setTag] = useState('热门');
-
-  const query = useQuery({
-    queryKey: ['douban', type, tag],
-    queryFn: ({ signal }) => api.douban(type, tag, 0, 50, signal),
-  });
+  const query = useDoubanPages(type, tag);
 
   const tags = type === 'movie' ? MOVIE_TAGS : TV_TAGS;
-  const items = query.data?.items ?? [];
+  const items = mergeRecommendations(query.data?.pages.flatMap((page) => page.items) ?? []);
 
   const switchType = (t: 'movie' | 'tv') => {
     if (t === type) return;
@@ -66,7 +73,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
           <button
             key={t}
             className={cn(
-              'px-2.5 py-1 rounded-full text-xs transition-colors',
+              'min-h-10 px-3 py-1.5 rounded-md text-xs transition-colors',
               t === tag ? 'bg-accent text-on-accent' : 'bg-chip text-muted hover:text-content hover:bg-hover'
             )}
             onClick={() => setTag(t)}
@@ -76,18 +83,17 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
         ))}
       </div>
 
-      {query.isError ? (
-        <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
+      {query.isError && !items.length ? (
+        <RecommendationError onRetry={() => void query.refetch()} />
       ) : query.isLoading ? (
         <GridSkeleton />
       ) : items.length === 0 ? (
         <p className="text-center text-sm text-faint py-8">该分类暂无推荐内容</p>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
-          {items.map((item) => (
-            <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />
-          ))}
-        </div>
+        <>
+          <div className={POSTER_GRID}>{items.map((item) => <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />)}</div>
+          <LoadMoreTrigger hasMore={!!query.hasNextPage} itemCount={items.length} loading={query.isFetchingNextPage} error={query.isFetchNextPageError} onLoad={() => { if (!query.isFetching) void query.fetchNextPage(); }} />
+        </>
       )}
     </section>
   );
@@ -123,11 +129,11 @@ function BangumiView({ onPick }: { onPick: (title: string) => void }) {
       </div>
 
       {query.isError ? (
-        <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
+        <RecommendationError onRetry={() => void query.refetch()} />
       ) : query.isLoading ? (
         <GridSkeleton />
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
+        <div className={POSTER_GRID}>
           {items.map((item) => (
             <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />
           ))}
@@ -149,42 +155,35 @@ const HOT_LISTS = [
 /** 影视热榜（60s API）：豆瓣五个周榜 + 百度热播剧，chips 切换 */
 function HotListView({ onPick }: { onPick: (title: string) => void }) {
   const [listId, setListId] = useState(HOT_LISTS[0].id);
-
   const query = useQuery({
     queryKey: ['hot-list', listId],
     queryFn: ({ signal }) => api.hotList(listId, signal),
   });
+  const recommendations = useDoubanPages(listId === 'douban_movie_weekly' ? 'movie' : 'tv', '热门', query.isFetched);
+  const items = mergeRecommendations([...(query.data?.items ?? []), ...(recommendations.data?.pages.flatMap((page) => page.items) ?? [])]);
+  const retryRecommendations = () => {
+    if (recommendations.isFetching) return;
+    if (recommendations.data) void recommendations.fetchNextPage();
+    else void recommendations.refetch();
+  };
 
-  const items = query.data?.items ?? [];
+  return <section aria-label="影视榜单推荐">
+    <div className="flex flex-wrap gap-1.5 mb-5">{HOT_LISTS.map((list) => <ChipButton key={list.id} active={listId === list.id} onClick={() => setListId(list.id)}>{list.label}</ChipButton>)}</div>
+    {query.isLoading ? <GridSkeleton /> : items.length ? <>
+      <div className={POSTER_GRID}>{items.map((item) => <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />)}</div>
+      <LoadMoreTrigger hasMore={!!recommendations.hasNextPage || recommendations.isError} itemCount={items.length} loading={recommendations.isFetching} error={recommendations.isError} onLoad={retryRecommendations} />
+    </> : recommendations.isFetching ? <GridSkeleton />
+      : <RecommendationError onRetry={() => { if (query.isError) void query.refetch(); void recommendations.refetch(); }} />}
+  </section>;
+}
 
-  return (
-    <section aria-label="影视榜单推荐">
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        {HOT_LISTS.map((l) => (
-          <ChipButton key={l.id} active={listId === l.id} onClick={() => setListId(l.id)}>
-            {l.label}
-          </ChipButton>
-        ))}
-      </div>
-
-      {query.isError ? (
-        <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
-      ) : query.isLoading ? (
-        <GridSkeleton />
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
-          {items.map((item) => (
-            <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
+function RecommendationError({ onRetry }: { onRetry: () => void }) {
+  return <div className="py-8 text-center"><p className="text-sm text-faint">推荐加载失败</p><button type="button" className="btn-ghost mt-2 min-h-11 text-xs" onClick={onRetry}>重试</button></div>;
 }
 
 function GridSkeleton() {
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
+    <div className={POSTER_GRID}>
       {Array.from({ length: 16 }).map((_, i) => (
         <div key={i}>
           <div className="aspect-[2/3] rounded-lg bg-chip animate-pulse" />
@@ -199,7 +198,7 @@ function ChipButton({ active, onClick, children }: { active: boolean; onClick: (
   return (
     <button
       className={cn(
-        'px-2.5 py-1 rounded-full text-xs transition-colors',
+        'min-h-10 px-3 py-1.5 rounded-md text-xs transition-colors',
         active ? 'bg-accent text-on-accent' : 'bg-chip text-muted hover:text-content hover:bg-hover'
       )}
       onClick={onClick}
@@ -212,7 +211,7 @@ function ChipButton({ active, onClick, children }: { active: boolean; onClick: (
 function TypeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
-      className={cn('px-3.5 py-1.5 rounded-md text-sm transition-colors', active ? 'bg-accent text-on-accent' : 'text-muted hover:text-content')}
+      className={cn('min-h-10 px-3.5 py-1.5 rounded-md text-sm transition-colors', active ? 'bg-accent text-on-accent' : 'text-muted hover:text-content')}
       onClick={onClick}
       aria-pressed={active}
     >

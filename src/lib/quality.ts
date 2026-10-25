@@ -3,7 +3,7 @@
  *
  * 画质信息不在 CMS 搜索接口里，只存在于 m3u8 内部（#EXT-X-STREAM-INF 的 RESOLUTION），
  * 因此只能「探测」（拉 m3u8 解析）或「实测」（播放器解码后读 videoHeight）。
- * 本模块只负责这两个来源产出的高度值如何命名与存放，不负责获取。
+ * 本模块只负责真实宽高如何命名与存放，不负责获取。
  */
 
 import type { QualityEntry } from './types';
@@ -79,20 +79,57 @@ const TIERS: ReadonlyArray<readonly [number, string]> = [
   [360, '360P'],
 ];
 
-/**
- * 高度 → 展示标签：就近取档。
- * 2160 及以上统称 4K（2K/1440 单独一档，避免 1440 被误标成 1080P）。
- * 偏差超过 15% 的按原样展示（如 144 → 144P、240 → 240P）。
- */
-export function qualityLabel(height?: number): string | undefined {
-  if (!height || height <= 0) return undefined;
+function validDimension(value?: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function nearestTier(height: number): readonly [number, string] | undefined {
   let best: readonly [number, string] | undefined;
   for (const tier of TIERS) {
-    const [value] = tier;
-    if (Math.abs(value - height) > value * TIER_TOLERANCE) continue;
-    if (!best || Math.abs(value - height) < Math.abs(best[0] - height)) best = tier;
+    if (Math.abs(tier[0] - height) > tier[0] * TIER_TOLERANCE) continue;
+    if (!best || Math.abs(tier[0] - height) < Math.abs(best[0] - height)) best = tier;
   }
-  return best ? best[1] : `${height}P`;
+  return best;
+}
+
+/** Compare display tiers without replacing the stored dimensions with a nominal height. */
+export function qualityRank(height?: number, width?: number): number | undefined {
+  if (!validDimension(height)) return undefined;
+  if (!validDimension(width)) return nearestTier(height)?.[0] ?? height;
+  const short = Math.min(height, width);
+  const long = Math.max(height, width);
+  let rank = nearestTier(short)?.[0] ?? short;
+  // Cropped cinema preserves its long edge: 3840×1608 is a 4K-width frame,
+  // while 1920×800 is a 1080P-width frame. Require a plausible crop and a
+  // close long-edge match; a tall phone or a narrow panorama must not jump tiers.
+  if (long / short <= 2.8) {
+    for (const [nominalHeight] of TIERS) {
+      const nominalWidth = nominalHeight * 16 / 9;
+      if (Math.abs(long - nominalWidth) <= nominalWidth * 0.03
+        && short >= nominalHeight * 0.65 && short <= nominalHeight * (1 + TIER_TOLERANCE)) {
+        rank = Math.max(rank, nominalHeight);
+      }
+    }
+  }
+  return rank;
+}
+
+/** Width is optional for legacy entries and bitrate-only estimates. */
+export function qualityLabel(height?: number, width?: number): string | undefined {
+  const rank = qualityRank(height, width);
+  if (rank === undefined) return undefined;
+  return TIERS.find(([value]) => value === rank)?.[1] ?? `${rank}P`;
+}
+
+function betterResolution(previous: QualityEntry, incoming: QualityEntry): QualityEntry {
+  const previousRank = qualityRank(previous.height, previous.width) ?? 0;
+  const incomingRank = qualityRank(incoming.height, incoming.width) ?? 0;
+  if (previousRank !== incomingRank) return incomingRank > previousRank ? incoming : previous;
+  const previousPair = validDimension(previous.height) && validDimension(previous.width);
+  const incomingPair = validDimension(incoming.height) && validDimension(incoming.width);
+  if (previousPair && incomingPair) return incoming.height! * incoming.width! >= previous.height! * previous.width! ? incoming : previous;
+  if (previousPair !== incomingPair) return incomingPair ? incoming : previous;
+  return (incoming.height ?? 0) >= (previous.height ?? 0) ? incoming : previous;
 }
 
 /** 缓存条目上限（按「源 + 影片」计）：每部剧 × 每个源一条，需防无上限膨胀 */
@@ -122,8 +159,8 @@ export function mergeQualityEntries(
     const prev = next[key];
     if (prev?.from === 'play') {
       if (value.from !== 'play') continue;
-      const best = Math.max(prev.height ?? 0, value.height ?? 0);
-      next[key] = { from: 'play', height: best || undefined, timestamp: now };
+      const best = betterResolution(prev, value);
+      next[key] = { from: 'play', height: best.height, width: best.width, timestamp: now };
       continue;
     }
     if (prev?.from === 'probe' && value.from === 'probe' && prev.height !== undefined && value.height === undefined) {
@@ -171,15 +208,16 @@ export function describeQualityBadge(
 ): QualityBadgeView | undefined {
   if (loading) return { kind: 'loading', title: '正在探测画质…', retryable: false };
   if (!entry) return undefined;
-  const label = qualityLabel(entry.height);
+  const label = qualityLabel(entry.height, entry.width);
+  const pixels = validDimension(entry.width) && validDimension(entry.height) ? `${entry.width}×${entry.height}` : `${entry.height}P`;
   if (label) {
     return {
       kind: 'value',
       label,
       title:
         entry.from === 'play'
-          ? `播放实测的真实分辨率（${entry.height}P）`
-          : `解析播放列表得到的档位（${entry.height}P）`,
+          ? `播放实测的真实分辨率（${pixels}）`
+          : `解析播放列表或分片得到的档位（${pixels}）`,
       retryable: false,
     };
   }
@@ -221,21 +259,21 @@ export interface QualitySummary {
  * 传入 undefined 的条目（尚未探测）不计入 total，避免进度分母虚高。
  */
 export function summarizeQuality(entries: Array<QualityEntry | undefined>): QualitySummary {
-  let bestHeight: number | undefined;
+  let best: QualityEntry | undefined;
   let known = 0;
   let failed = 0;
   let total = 0;
   for (const entry of entries) {
     if (!entry) continue;
     total += 1;
-    if (entry.height !== undefined && entry.height > 0) {
+    if (qualityRank(entry.height, entry.width) !== undefined) {
       known += 1;
-      if (bestHeight === undefined || entry.height > bestHeight) bestHeight = entry.height;
+      best = best ? betterResolution(best, entry) : entry;
     } else if (entry.error) {
       failed += 1;
     }
   }
-  return { best: qualityLabel(bestHeight), known, failed, total };
+  return { best: qualityLabel(best?.height, best?.width), known, failed, total };
 }
 
 /**

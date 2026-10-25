@@ -51,22 +51,27 @@ export function parseSearchList(
  * 部分源（如量子 lziapi、非凡 ffzy）第一条线路是网页中转页（…/share/xxx，不可播），
  * 真实 m3u8 在后面的线路里，因此优先取包含 m3u8 直链的线路；均无 m3u8 时回退第一条。
  */
-export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
-  if (!playUrl) return [];
+function extractEpisodeGroup(playUrl: string): { episodes: string[]; labels: string[] } {
+  if (!playUrl) return { episodes: [], labels: [] };
   const groups = playUrl
     .split('$$$')
-    .map((group) =>
-      group
+    .map((group) => {
+      const entries = group
         .split('#')
         .map((ep) => {
-          const parts = ep.split('$');
-          return parts.length > 1 ? parts[1] : '';
+          const separator = ep.indexOf('$');
+          return { label: ep.slice(0, separator).trim(), url: separator >= 0 ? ep.slice(separator + 1).trim() : '' };
         })
-        .filter((url) => url.startsWith('http://') || url.startsWith('https://'))
-    )
-    .filter((eps) => eps.length > 0);
-  if (groups.length === 0) return [];
-  return groups.find((eps) => eps.some((url) => url.includes('.m3u8'))) ?? groups[0];
+        .filter(({ url }) => url.startsWith('http://') || url.startsWith('https://'));
+      return { episodes: entries.map(({ url }) => url), labels: entries.map(({ label }) => label) };
+    })
+    .filter((group) => group.episodes.length > 0);
+  return groups.find(({ episodes }) => episodes.some((url) => url.includes('.m3u8')))
+    ?? groups[0] ?? { episodes: [], labels: [] };
+}
+
+export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
+  return extractEpisodeGroup(playUrl).episodes;
 }
 
 /** 从简介文本中兜底提取 m3u8 链接 */
@@ -86,12 +91,14 @@ export function parseDetail(
     throw new Error('获取到的详情内容无效');
   }
   const vod = d.list[0];
-  let episodes = extractEpisodesFromPlayUrl(String(vod.vod_play_url ?? ''));
+  const group = extractEpisodeGroup(String(vod.vod_play_url ?? ''));
+  let episodes = group.episodes;
   if (episodes.length === 0) {
     episodes = extractM3u8FromText(String(vod.vod_content ?? ''));
   }
   return {
     episodes,
+    episodeLabels: group.labels.length ? group.labels : undefined,
     videoInfo: {
       title: str(vod.vod_name),
       cover: str(vod.vod_pic),
@@ -282,4 +289,50 @@ export function filterRelevantResults<T extends { name?: string }>(items: T[], w
   const query = prepareQuery(wd);
   if (!query) return items;
   return items.filter((item) => isRelevantPrepared(item.name || '', query));
+}
+
+// Only known presentation editions are removable. Narrative suffixes such as
+// 外传、花絮、预告 and 影视解说 remain part of the title and cannot match a feature.
+const EDITION_TOKEN = '(?:国(?:语|粤双语)|粤语|普通话|英语|日语|韩语|台配|中字|中文字幕|简繁字幕|中英双字|中英字幕|双语|无字幕|高清|超清|蓝光|蓝光原盘|修复版|重制版|导演剪辑版|加长版|未删减版|4K|8K|UHD|HDR(?:10)?\\+?|DV|杜比视界|2160[Pp]|1080[Pp]|720[Pp]|HD|BD|WEB[- .]?DL|Blu[- ]?Ray)';
+const EDITION_GROUP = new RegExp(`^[\\s,，/|+·.-]*(?:${EDITION_TOKEN}[\\s,，/|+·.-]*)+$`, 'i');
+const EDITION_SUFFIX = new RegExp(`[\\s,，/|+·._-]*${EDITION_TOKEN}\\s*$`, 'i');
+
+function titleWithoutEdition(value: string): string {
+  let title = value.normalize('NFKC').trim();
+  let previous: string;
+  do {
+    previous = title;
+    title = title.replace(/[([{【]([^()[\]{}【】]*)[)\]}】]/g, (whole, content: string) => EDITION_GROUP.test(content) ? '' : whole)
+      .replace(EDITION_SUFFIX, '').trim();
+  } while (title !== previous);
+  return title;
+}
+
+function exactSeason(title: string, query = false): { base: string; season: number } | undefined {
+  const english = title.match(/^(.*?)\s*(?:\bseason\s*(\d{1,2})|\bS(\d{1,2}))\s*$/i);
+  if (english && normalizeTitle(english[1])) return { base: english[1], season: Number(english[2] || english[3]) };
+  const parsed = parseSeasonSuffix(title, false, !query);
+  return parsed && (parsed.explicit || query) ? parsed : undefined;
+}
+
+/** Whole-title search with edition and explicit season aliases, never substring/OR matching. */
+export function isExactTitleMatch(name: string, wd: string): boolean {
+  const title = titleWithoutEdition(name);
+  const query = titleWithoutEdition(wd);
+  const normalized = normalizeTitle(query);
+  if (!normalized || !normalizeTitle(title)) return false;
+  if (normalizeTitle(title) === normalized) return true;
+  const titleSeason = exactSeason(title);
+  const querySeason = exactSeason(query, true);
+  if (titleSeason) {
+    return normalizeTitle(titleSeason.base) === normalizeTitle(querySeason?.base ?? query)
+      && (!querySeason || titleSeason.season === querySeason.season);
+  }
+  return false;
+}
+
+export function filterExactTitleResults<T extends { name?: string; typeName?: string }>(items: T[], wd: string): T[] {
+  const requestedExtra = /解说|花絮|预告|特辑|幕后/.test(wd);
+  return items.filter((item) => isExactTitleMatch(item.name || '', wd)
+    && (requestedExtra || !/解说|花絮|预告|特辑|幕后/.test(item.typeName || '')));
 }

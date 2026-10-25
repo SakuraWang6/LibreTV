@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { guardRequest } from '@/lib/api-guard';
-import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
+import { cmsRequestHeaders, filterAdultResults, filterExactTitleResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
+import { isLibvioSource } from '@/lib/providers/libvio/source';
+import { searchLibvio } from '@/lib/providers/libvio/server';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -18,8 +20,8 @@ const SEARCH_CACHE_TTL = 60 * 1000;
 
 /** 缓存键：wd + 成人过滤 + 排序后的源地址集合（直接用完整字符串，避免哈希碰撞串缓存） */
 function searchCacheKey(wd: string, sources: SourceConfig[], filterAdult: boolean): string {
-  const urls = sources.map((s) => s.url.replace(/\/+$/, '')).sort().join('|');
-  return `search:${wd}\n${filterAdult ? 1 : 0}\n${urls}`;
+  const urls = sources.map((s) => `${s.kind || 'cms'}:${s.url.replace(/\/+$/, '')}`).sort().join('|');
+  return `search:exact-v1:${wd}\n${filterAdult ? 1 : 0}\n${urls}`;
 }
 
 /**
@@ -57,6 +59,7 @@ function isTimeoutError(err: unknown): boolean {
  * 旧版在浏览器里打满 N 个请求（暴露用户 IP、无法缓存、超时失控），现全部上移。
  */
 async function searchSource(source: SourceConfig, wd: string): Promise<SourceSearchOutcome> {
+  if (isLibvioSource(source)) return searchLibvio(source, wd);
   const start = Date.now();
   const finish = (outcome: Omit<SourceSearchOutcome, 'ms'>): SourceSearchOutcome => ({
     ...outcome,
@@ -161,8 +164,7 @@ function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAd
   });
 
   list = filterAdultResults(list, filterAdult);
-  // 部分源站做分词/OR 模糊搜索（搜「摔跤吧！爸爸」返回一堆「爸爸XXX」），按关键词过滤
-  list = filterRelevantResults(list, wd);
+  list = filterExactTitleResults(list, wd);
 
   // 精确命中（忽略标点差异）排在最前，其余按名称（与旧版一致），名称相同按源名
   const exact = normalizeTitle(wd);

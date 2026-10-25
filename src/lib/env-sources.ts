@@ -1,4 +1,5 @@
 import type { SourceConfig } from './types';
+import { isLibvioSource } from './providers/libvio/source';
 
 /**
  * 部署者通过 DEFAULT_SOURCES 环境变量预置的采集站。
@@ -15,7 +16,7 @@ export function getEnvSources(): SourceConfig[] {
       if (typeof item !== 'object' || item === null) {
         throw new Error(`第 ${i + 1} 项不是对象`);
       }
-      const { name, url, detail, isAdult } = item as Record<string, unknown>;
+      const { name, url, detail, isAdult, kind } = item as Record<string, unknown>;
       if (typeof name !== 'string' || !name.trim()) {
         throw new Error(`第 ${i + 1} 项缺少 name`);
       }
@@ -24,6 +25,7 @@ export function getEnvSources(): SourceConfig[] {
       }
       return {
         key: `env_${i}`,
+        ...((kind === 'libvio' || isLibvioSource({ url })) ? { kind: 'libvio' as const } : kind === 'cms' ? { kind: 'cms' as const } : {}),
         name: name.trim(),
         url: url.trim().replace(/\/+$/, ''),
         detail: typeof detail === 'string' && detail.trim() ? detail.trim() : undefined,

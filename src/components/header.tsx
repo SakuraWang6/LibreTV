@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import { ThemeToggle } from './theme';
 import { SourceManagerDrawer } from './source-manager';
 import { HistoryPanel } from './history-panel';
@@ -10,6 +11,8 @@ import { requestShowDownloadManager } from './download-manager';
 import { Icon, type IconName } from './icon';
 import { SearchHistoryDropdown, useSearchHistory } from './search-history';
 import { cn } from '@/lib/utils';
+import { fetchLibrarySync } from '@/lib/library-sync-client';
+import { useAuth } from './auth';
 
 interface LibraryNavigation {
   filter: 'all' | 'movie' | 'tv';
@@ -22,14 +25,23 @@ interface LibraryNavigation {
 export function Header({ showSearch = false, libraryNavigation }: { showSearch?: boolean; libraryNavigation?: LibraryNavigation }) {
   const router = useRouter();
   const pathname = usePathname();
+  const { verified } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
   const searchHistory = useSearchHistory(query);
+  const serverCapability = useQuery({
+    queryKey: ['library-server-capability'],
+    queryFn: fetchLibrarySync,
+    enabled: verified && !libraryNavigation,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const hasServer = verified && (libraryNavigation?.hasServer ?? serverCapability.data?.enabled ?? false);
   const inLibrary = pathname === '/library';
   const inLibraryPlayer = pathname.startsWith('/library/play/');
-  const title = inLibraryPlayer ? '播放' : inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
+  const title = inLibraryPlayer || pathname === '/watch' ? '播放' : inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -78,6 +90,10 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
     if (libraryNavigation) { libraryNavigation.onView('local'); libraryNavigation.onFilter(filter); }
     else router.push(`/library${filter === 'all' ? '' : `?kind=${filter}`}`);
   };
+  const selectServer = () => {
+    if (libraryNavigation) libraryNavigation.onView('server');
+    else router.push('/library?view=server');
+  };
   const navButton = (label: string, icon: IconName, onClick: () => void, active?: boolean) => <button type="button" className={cn('mac-nav-item', active && 'is-active')} onClick={() => { onClick(); setSidebarOpen(false); }} aria-pressed={active}><Icon name={icon} /><span>{label}</span></button>;
 
   return <>
@@ -91,7 +107,7 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
         {navButton('全部影片', 'library', () => selectFilter('all'), inLibrary && libraryNavigation?.view !== 'server' && (!libraryNavigation || libraryNavigation.filter === 'all'))}
         {navButton('电影', 'film', () => selectFilter('movie'), inLibrary && libraryNavigation?.view !== 'server' && libraryNavigation?.filter === 'movie')}
         {navButton('电视剧', 'tv', () => selectFilter('tv'), inLibrary && libraryNavigation?.view !== 'server' && libraryNavigation?.filter === 'tv')}
-        {libraryNavigation?.hasServer && navButton('服务器片库', 'server', () => libraryNavigation.onView('server'), libraryNavigation.view === 'server')}
+        {hasServer && navButton('服务器片库', 'server', selectServer, inLibrary && libraryNavigation?.view === 'server')}
         {navButton('下载', 'download', requestShowDownloadManager)}
         {navButton('观看历史', 'clock', () => setHistoryOpen(true))}
         <p className="mac-nav-label">更多</p>

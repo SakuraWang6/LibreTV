@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
 // 播放器（artplayer + hls.js）按需加载：拆出独立 chunk，不占首屏 First Load JS
 const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) => m.PlayerShell), {
@@ -16,7 +16,10 @@ const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) =
   ),
 });
 import { EmptyState, LoadingState, Spinner } from '@/components/states';
-import { SwitchSourceModal } from '@/components/switch-source';
+import { PlaybackSourcePicker } from '@/components/switch-source';
+import { useLibraryPlaybackProgress } from '@/components/use-library-playback-progress';
+import { buildPlaybackSwitchUrl, canLinkLibraryProgress, episodeFromLabel, isPlayableEpisode, matchPlaybackEpisode, playbackKind, requestedResumePosition, titleSeason, type PlaybackIdentity, type PlaybackSelection } from '@/lib/playback-source';
+import type { LibraryResponse } from '@/lib/local-library/types';
 import { SkipMarkPanel } from '@/components/skip-mark-panel';
 import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks';
 import type { PlayerSkipApi } from '@/components/player-shell';
@@ -55,6 +58,8 @@ function WatchContent() {
   const store = useAppStore();
   const { verified } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { save: saveLinkedProgress, saveError: linkedSaveError } = useLibraryPlaybackProgress();
 
   const sourceKey = searchParams.get('source') || '';
   const vodId = searchParams.get('id') || '';
@@ -63,10 +68,11 @@ function WatchContent() {
   const indexParam = parseInt(searchParams.get('index') || '0', 10) || 0;
 
   const [reversed, setReversed] = useState(false);
-  const [switchOpen, setSwitchOpen] = useState(false);
   const [skipPanelOpen, setSkipPanelOpen] = useState(false);
   // 播放器对外暴露的精确时间读取接口（「记录当前」用），随播放器卸载置空
   const playerApiRef = useRef<PlayerSkipApi | null>(null);
+  const latestClock = useRef({ position: 0, duration: 0 });
+  const sourcePanel = useRef<HTMLDivElement>(null);
   // 播放框：小屏「跳过标记」抽屉要按它的底边算剩余高度，避免压住画面
   const playerFrameRef = useRef<HTMLDivElement | null>(null);
   const [sheetMaxHeight, setSheetMaxHeight] = useState<number | undefined>(undefined);
@@ -99,14 +105,16 @@ function WatchContent() {
     };
   }, [skipPanelOpen]);
 
-  const source = resolveSource(store, sourceKey, {
+  const resolvedSource = resolveSource(store, sourceKey, {
     url: searchParams.get('sourceUrl') || undefined,
     detail: searchParams.get('detail') || undefined,
   });
+  const sourceKind = searchParams.get('sourceKind');
+  const source = resolvedSource && sourceKind === 'libvio' ? { ...resolvedSource, kind: 'libvio' as const } : resolvedSource;
 
   // 详情查询：无 id（纯直连链接分享）时跳过
   const detailQuery = useQuery({
-    queryKey: ['detail', sourceKey, vodId, source?.url],
+    queryKey: ['detail', sourceKey, vodId, source?.url, source?.kind],
     queryFn: ({ signal }) => api.detail(vodId, source!, signal),
     enabled: Boolean(source && vodId && verified),
     staleTime: 5 * 60_000,
@@ -114,23 +122,46 @@ function WatchContent() {
 
   const episodes = useMemo(() => detailQuery.data?.episodes ?? [], [detailQuery.data]);
   const videoInfo = detailQuery.data?.videoInfo;
-  const videoTitle = titleParam || videoInfo?.title || '未知视频';
-  const isSeries = !/电影|movie|film/i.test(videoInfo?.typeName || '')
-    && (/剧|连续|电视|series|drama|tv/i.test(videoInfo?.typeName || '') || episodes.length > 1);
+  const videoTitle = videoInfo?.title || titleParam || '未知视频';
+  const isSeries = playbackKind(videoInfo?.typeName, episodes.length) === 'tv';
 
   // 当前播放地址：优先取剧集列表中的当前集，其次直连 URL 参数
   const currentUrl = useMemo(() => {
     if (episodes.length > 0) {
       const idx = Math.min(Math.max(indexParam, 0), episodes.length - 1);
-      return episodes[idx] || directUrl;
+      const value = episodes[idx] || directUrl;
+      return isPlayableEpisode(value, detailQuery.data) ? value : '';
     }
-    return directUrl;
-  }, [episodes, indexParam, directUrl]);
+    return isPlayableEpisode(directUrl, detailQuery.data) ? directUrl : '';
+  }, [episodes, indexParam, directUrl, detailQuery.data]);
 
   const currentIndex = useMemo(() => {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
     return indexParam;
   }, [episodes, indexParam]);
+
+  const identity: PlaybackIdentity = {
+    title: videoTitle,
+    kind: playbackKind(videoInfo?.typeName, episodes.length), typeName: videoInfo?.typeName,
+    year: videoInfo?.year,
+    seasonNumber: detailQuery.data?.episodeSeasons?.[currentIndex] ?? titleSeason(videoTitle).season ?? 1,
+    episodeNumber: episodeFromLabel(detailQuery.data?.episodeLabels?.[currentIndex]) ?? currentIndex + 1,
+  };
+  const libraryId = searchParams.get('libraryId') || '';
+  const libraryQuery = useQuery({
+    queryKey: ['playback-library-link', libraryId],
+    queryFn: async ({ signal }) => {
+      const response = await fetch('/api/library', { credentials: 'same-origin', signal });
+      if (!response.ok) throw new Error('无法读取本地影视库');
+      return response.json() as Promise<LibraryResponse>;
+    },
+    enabled: verified && /^[a-f0-9]{32}$/.test(libraryId), staleTime: 30_000,
+  });
+  const linkedEntry = libraryQuery.data?.items.find((entry) => entry.id === libraryId);
+  const linkedLibraryId = linkedEntry && detailQuery.data && canLinkLibraryProgress(linkedEntry, identity, detailQuery.data) ? linkedEntry.id : undefined;
+  const playbackKey = `${sourceKey}:${vodId}:${currentIndex}:${currentUrl}`;
+  const restoreState = useRef({ key: playbackKey, ready: false });
+  if (restoreState.current.key !== playbackKey) restoreState.current = { key: playbackKey, ready: false };
 
   // 跳过片段按剧名记忆：换集不变，换源到同名资源也能命中。
   // 标题缺失（直连链接）时退回 source:vodId，至少保证本源本片可用。
@@ -153,6 +184,9 @@ function WatchContent() {
       sp.set('index', String(index));
       sp.set('url', episodes[index] || directUrl);
       sp.delete('position');
+      // A library record belongs to one precise episode; a different episode
+      // must never inherit that record merely because the online show matches.
+      sp.delete('libraryId');
       router.replace(`/watch?${sp.toString()}`, { scroll: false });
     },
     [router, searchParams, episodes, directUrl]
@@ -160,12 +194,16 @@ function WatchContent() {
 
   // 进度恢复优先级：URL position 参数 > IndexedDB 记录
   const getRestorePosition = useCallback(async () => {
-    const urlPos = parseInt(searchParams.get('position') || '0', 10) || 0;
-    if (urlPos > 0) return urlPos;
-    if (!vodId) return 0;
-    const entry = await db.progress.get(progressKeyOf(sourceKey, vodId, currentIndex));
-    return entry?.position ?? 0;
-  }, [searchParams, sourceKey, vodId, currentIndex]);
+    let position = 0;
+    const explicit = requestedResumePosition(searchParams.get('position'));
+    if (explicit !== undefined) position = explicit;
+    else if (vodId) {
+      const entry = await db.progress.get(progressKeyOf(sourceKey, vodId, currentIndex));
+      position = entry?.position ?? 0;
+    }
+    if (restoreState.current.key === playbackKey) restoreState.current.ready = true;
+    return position;
+  }, [searchParams, sourceKey, vodId, currentIndex, playbackKey]);
 
   // 写入观看历史（进入页面即记录，进度后续增量更新）
   useEffect(() => {
@@ -191,13 +229,26 @@ function WatchContent() {
   // 播放中与暂停时的进度落盘逻辑一致，共用同一回调
   const handleProgress = useCallback(
     (position: number, duration: number) => {
+      if (!restoreState.current.ready || restoreState.current.key !== playbackKey) return;
+      latestClock.current = { position, duration };
       if (vodId) {
         saveProgress(sourceKey, vodId, currentIndex, position, duration).catch(() => {});
         updateHistoryProgress(sourceKey, vodId || currentUrl, position, duration).catch(() => {});
       }
+      saveLinkedProgress(linkedLibraryId, position, duration);
     },
-    [sourceKey, vodId, currentIndex, currentUrl]
+    [sourceKey, vodId, currentIndex, currentUrl, playbackKey, saveLinkedProgress, linkedLibraryId]
   );
+
+  const switchSource = (selection: PlaybackSelection) => {
+    const match = matchPlaybackEpisode(identity, selection.result, selection.detail);
+    if (match.index === undefined) { toast(match.reason || '无法准确续接当前集', 'warning'); return; }
+    const position = playerApiRef.current?.getCurrentTime() ?? latestClock.current.position;
+    const duration = playerApiRef.current?.getDuration() ?? latestClock.current.duration;
+    handleProgress(position, duration);
+    queryClient.setQueryData(['detail', selection.source.key, selection.result.vodId, selection.source.url, selection.source.kind], selection.detail);
+    router.replace(buildPlaybackSwitchUrl({ ...selection, index: match.index }, position, linkedLibraryId), { scroll: false });
+  };
 
   // 自动连播的 800ms 延迟切集要在卸载时取消，避免离开页面后跳转
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -206,11 +257,13 @@ function WatchContent() {
   }, []);
 
   const handleEnded = useCallback(() => {
+    const duration = playerApiRef.current?.getDuration() ?? latestClock.current.duration;
+    if (duration > 0) saveLinkedProgress(linkedLibraryId, duration, duration);
     if (vodId) clearProgress(sourceKey, vodId, currentIndex).catch(() => {});
     if (store.autoplayNext && currentIndex < episodes.length - 1) {
       autoNextTimer.current = setTimeout(() => goEpisode(currentIndex + 1), 800);
     }
-  }, [store.autoplayNext, currentIndex, episodes.length, goEpisode, sourceKey, vodId]);
+  }, [store.autoplayNext, currentIndex, episodes.length, goEpisode, sourceKey, vodId, saveLinkedProgress, linkedLibraryId]);
 
   // 快捷键（Shift+I/O/S/E）记录片段：校验后写入
   const handleRecordSegment = useCallback(
@@ -285,19 +338,20 @@ function WatchContent() {
           <HomeButton />
           <div className="min-w-0">
             <h1 className="text-sm font-medium text-content truncate">{videoTitle}</h1>
-            {episodes.length > 0 && (
-              <p className="text-xs text-faint">第 {currentIndex + 1}/{episodes.length} 集</p>
+            {isSeries && episodes.length > 0 && (
+              <p className="text-xs text-faint">{detailQuery.data?.episodeLabels?.[currentIndex] || `第 ${identity.episodeNumber} 集`}</p>
             )}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button
               className="btn-ghost btn-sm"
+              disabled={!currentUrl}
               onClick={() => {
                 if (!currentUrl) return;
                 enqueueDownload({
                   url: currentUrl,
                   // 多集才带集数后缀；单集影片（含电影）文件名就是纯标题
-                  title: `${videoTitle}${episodes.length > 1 ? ` 第${currentIndex + 1}集` : ''}`,
+                  title: `${videoTitle}${isSeries ? ` ${detailQuery.data?.episodeLabels?.[currentIndex] || `第${identity.episodeNumber}集`}` : ''}`,
                   format: 'MP4',
                   libraryMetadata: {
                     title: videoInfo?.title || videoTitle,
@@ -307,7 +361,7 @@ function WatchContent() {
                     coverUrl: videoInfo?.cover,
                     sourceName: videoInfo?.sourceName || source.name,
                     ...(isSeries
-                      ? { seasonNumber: 1, episodeNumber: currentIndex + 1, episodeTitle: `第 ${currentIndex + 1} 集` } : {}),
+                      ? { seasonNumber: identity.seasonNumber, episodeNumber: identity.episodeNumber, episodeTitle: detailQuery.data?.episodeLabels?.[currentIndex] || `第 ${identity.episodeNumber} 集` } : {}),
                   },
                 });
                 // 「已加入下载队列」由 DownloadManager 在真正入队后提示：
@@ -315,9 +369,6 @@ function WatchContent() {
               }}
             >
               下载本集
-            </button>
-            <button className="btn-ghost btn-sm" onClick={() => setSwitchOpen(true)}>
-              切换资源
             </button>
           </div>
         </div>
@@ -329,6 +380,7 @@ function WatchContent() {
             <div ref={playerFrameRef} className="aspect-video bg-black rounded-lg overflow-hidden">
               {currentUrl ? (
                 <PlayerShell
+                  key={playbackKey}
                   url={currentUrl}
                   title={videoTitle}
                   adFilter={store.adFilter}
@@ -346,15 +398,16 @@ function WatchContent() {
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
                   onEnded={handleEnded}
+                  onRequestSwitchSource={() => sourcePanel.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}
                   hasPrevEpisode={currentIndex > 0}
                   hasNextEpisode={episodes.length > 0 && currentIndex < episodes.length - 1}
                   onPrevEpisode={() => goEpisode(currentIndex - 1)}
                   onNextEpisode={() => goEpisode(currentIndex + 1)}
-                  onQuality={(height) => {
+                  onQuality={(height, width) => {
                     // 播放实测是最权威的画质来源，回写后搜索列表里该「源 + 影片」直接显示
                     if (!sourceKey || !vodId) return;
                     useAppStore.getState().setQuality({
-                      [qualityKey(sourceKey, vodId)]: { height, from: 'play', timestamp: Date.now() },
+                      [qualityKey(sourceKey, vodId)]: { height, width, from: 'play', timestamp: Date.now() },
                     });
                   }}
                 />
@@ -363,13 +416,16 @@ function WatchContent() {
                   {detailQuery.isLoading ? (
                     <Spinner size="lg" />
                   ) : (
-                    <p className="text-faint text-sm">
-                      {detailQuery.isError ? '视频加载失败，请尝试其他资源' : '无可用播放地址'}
-                    </p>
+                    <div className="text-center px-6 max-w-md">
+                      <p className="text-faint text-sm">{detailQuery.data?.message || (detailQuery.isError ? '视频加载失败，可以在右侧选择其他播放源' : '此条目没有可直接播放的视频')}</p>
+                      {detailQuery.data?.externalLinks?.filter((link) => /^https?:\/\//i.test(link.url)).map((link) => <a key={link.url} className="btn-ghost btn-sm mt-3 inline-flex" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>)}
+                      {detailQuery.data?.pageUrl && /^https?:\/\//i.test(detailQuery.data.pageUrl) && <a className="btn-ghost btn-sm mt-3 inline-flex" href={detailQuery.data.pageUrl} target="_blank" rel="noopener noreferrer">在原网站打开</a>}
+                    </div>
                   )}
                 </div>
               )}
             </div>
+            {linkedSaveError && <p className="text-xs text-danger mt-2" role="status">本地进度保存失败</p>}
 
             {/* 操作栏 */}
             <div className="flex flex-wrap items-center gap-2 mt-3">
@@ -437,9 +493,14 @@ function WatchContent() {
 
           {/* 剧集侧栏 */}
           <aside className="bg-surface-raised rounded-lg p-3 h-fit">
+            <section aria-label="影片简介" className="pb-4">
+              <h2 className="text-base font-semibold text-content leading-snug">{videoTitle}</h2>
+              <p className="text-xs text-muted mt-2">{[videoInfo?.year, videoInfo?.area, videoInfo?.typeName].filter(Boolean).join(' · ')}</p>
+              {videoInfo?.desc && <p className="text-xs text-muted leading-relaxed mt-3 max-h-40 overflow-y-auto scrollbar-thin">{videoInfo.desc.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').trim()}</p>}
+            </section>
             <div className="flex items-center justify-between gap-2 mb-2.5">
               <h2 className="text-sm font-semibold text-content">
-                剧集列表{episodes.length > 0 && `（${episodes.length}）`}
+                {isSeries ? '选集' : '影片'}
               </h2>
               {/* 排列开关紧贴它所作用的列表：放在这里才看得出它管的是这一栏的顺序 */}
               {episodes.length > 1 && (
@@ -470,11 +531,15 @@ function WatchContent() {
                     key={realIndex}
                     index={realIndex}
                     active={realIndex === currentIndex}
+                    label={detailQuery.data?.episodeLabels?.[realIndex]}
                     onClick={() => goEpisode(realIndex)}
                   />
                 ))}
               </div>
             )}
+            <div ref={sourcePanel}>
+              <PlaybackSourcePicker identity={identity} currentSourceKey={sourceKey} currentVodId={vodId} onSwitch={switchSource} autoLoad={Boolean(detailQuery.data) || detailQuery.isError} />
+            </div>
             <p className="hidden md:block text-[10px] text-faint mt-3 leading-relaxed">
               快捷键：空格 播放/暂停 · ←/→ 快退/快进 5s · ↑/↓ 音量 · F 全屏 · Alt+←/→ 切换集数
             </p>
@@ -482,21 +547,12 @@ function WatchContent() {
         </div>
       </main>
 
-      {switchOpen && (
-        <SwitchSourceModal
-          currentTitle={videoTitle}
-          currentSourceKey={sourceKey}
-          currentVodId={vodId}
-          currentIndex={currentIndex}
-          onClose={() => setSwitchOpen(false)}
-        />
-      )}
     </div>
   );
 }
 
 /** 集数按钮：激活时自动滚动进可视区（长剧列表） */
-function EpisodeButton({ index, active, onClick }: { index: number; active: boolean; onClick: () => void }) {
+function EpisodeButton({ index, active, label, onClick }: { index: number; active: boolean; label?: string; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -508,8 +564,9 @@ function EpisodeButton({ index, active, onClick }: { index: number; active: bool
       ref={ref}
       className={cn('btn btn-sm !px-1', active ? 'episode-active' : 'btn-ghost')}
       onClick={onClick}
+      title={label || `第 ${index + 1} 集`}
     >
-      {index + 1}
+      {episodeFromLabel(label) ?? label ?? index + 1}
     </button>
   );
 }

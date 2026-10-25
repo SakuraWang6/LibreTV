@@ -1,4 +1,5 @@
 import type { SourceListPayload } from './types';
+import { isLibvioSource } from './providers/libvio/source';
 
 /**
  * 数据源订阅（LibreTV-SourceList JSON）的纯解析层：只做字段裁剪、去重与上限，
@@ -24,6 +25,7 @@ export function normalizeSubscriptionUrl(raw: string): string {
 }
 
 interface RawItem {
+  kind?: unknown;
   name?: unknown;
   url?: unknown;
   detail?: unknown;
@@ -93,6 +95,7 @@ export function parseSourceListPayload(json: unknown): SourceListPayload {
     if (!url || seenVod.has(url)) continue;
     seenVod.add(url);
     sources.push({
+      ...((s.kind === 'libvio' || isLibvioSource({ url })) ? { kind: 'libvio' as const } : s.kind === 'cms' ? { kind: 'cms' as const } : {}),
       name: optionalString(s?.name) || hostnameOf(url),
       url,
       detail: optionalString(s?.detail),

@@ -1,5 +1,7 @@
 'use client';
 
+import { clampResumePosition, isNativeMediaUrl } from '@/lib/playback-source';
+
 import { useEffect, useRef, useState } from 'react';
 import Artplayer from 'artplayer';
 import Hls, { type HlsConfig } from 'hls.js';
@@ -89,7 +91,7 @@ interface PlayerShellProps {
    * 单码率 m3u8 / 直链的分辨率只能等解码后才知道，播放一次后回写缓存，
    * 下次搜索同一部剧就能直接显示画质，不必再探测。
    */
-  onQuality?: (height: number) => void;
+  onQuality?: (height: number, width?: number) => void;
   /** 恢复策略判源不可用（重试耗尽/格式硬失败）时回调：父级弹出换源面板 */
   onRequestSwitchSource?: (reason: string) => void;
   /** 控制条上的上一集 / 下一集：不在播放器里也能切集，省得回到页面按钮 */
@@ -151,8 +153,8 @@ export function PlayerShell({
   };
 
   /** 上报实测画质：多次上报取大值由调用方决定，这里只管把拿到的高度传出去 */
-  const reportQuality = (height: number) => {
-    if (height > 0) propsRef.current.onQuality?.(height);
+  const reportQuality = (height: number, width?: number) => {
+    if (height > 0) propsRef.current.onQuality?.(height, width && width > 0 ? width : undefined);
   };
 
   // 跨集共享、每次换集重置的播放链路状态
@@ -221,7 +223,7 @@ export function PlayerShell({
   // 当前集预取（episodeKey 缺省 = 关闭，见 ensure 内部 settings.enabled 判断）
   const ensurePrefetch = (mediaUrl: string, currentTime: number, horizonSeconds?: number) => {
     const p = propsRef.current;
-    if (!p.episodeKey) return;
+    if (!p.episodeKey || isNativeMediaUrl(mediaUrl)) return;
     getVideoPrefetcher().ensure({
       m3u8Url: mediaUrl,
       currentTime,
@@ -229,7 +231,7 @@ export function PlayerShell({
       horizonSeconds,
       onProgress: (stats) => {
         // 当前集预取完成且存在下一集：用独立预取器预热下一集前 7 分钟
-        if (stats.state === 'done' && p.nextUrl && p.nextEpisodeKey) {
+        if (stats.state === 'done' && p.nextUrl && p.nextEpisodeKey && !isNativeMediaUrl(p.nextUrl)) {
           getNextEpisodePrefetcher().ensure({
             m3u8Url: p.nextUrl,
             currentTime: 0,
@@ -349,8 +351,7 @@ export function PlayerShell({
     restoreCleanupRef.current = null;
     hlsRef.current?.destroy();
     currentMediaUrlRef.current = mediaUrl;
-    const hls = new Hls(buildHlsConfig());
-    hlsRef.current = hls;
+    hlsRef.current = null;
 
     let restoreInFlight = false;
     const restoreAndStart = async () => {
@@ -365,11 +366,12 @@ export function PlayerShell({
       try {
         const saved = (await propsRef.current.getRestorePosition?.()) ?? 0;
         const currentDuration = artRef.current?.duration || video.duration || duration;
+        const resume = clampResumePosition(saved, currentDuration);
         let prefetchAnchor = video.currentTime;
-        if (saved > 10 && Number.isFinite(currentDuration) && saved < currentDuration - 2) {
-          if (artRef.current) artRef.current.currentTime = saved;
-          prefetchAnchor = saved;
-          showHint(`已从 ${formatTime(saved)} 继续播放`);
+        if (resume > 0) {
+          if (artRef.current) artRef.current.currentTime = resume;
+          prefetchAnchor = resume;
+          showHint(`已从 ${formatTime(resume)} 继续播放`);
         }
         restoredRef.current = true;
         restoreCleanupRef.current?.();
@@ -390,16 +392,26 @@ export function PlayerShell({
       restoreEvents.forEach((event) => video.removeEventListener(event, onRestoreEvent));
     };
 
+    // Direct files share the same clock, restore and progress callbacks as HLS.
+    if (isNativeMediaUrl(mediaUrl)) {
+      video.removeAttribute('crossorigin');
+      video.src = mediaUrl;
+      video.load();
+      return;
+    }
+
+    const hls = new Hls(buildHlsConfig());
+    hlsRef.current = hls;
+
     hls.loadSource(mediaUrl);
     hls.attachMedia(video);
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       recoveryRef.current?.markHealthy();
       // master playlist 的档位高度：多码率源在这里就能拿到上限
-      const heights = hls.levels
-        .map((level) => level.height)
-        .filter((h): h is number => typeof h === 'number' && h > 0);
-      if (heights.length > 0) reportQuality(Math.max(...heights));
+      const best = hls.levels.filter((level) => typeof level.height === 'number' && level.height > 0)
+        .sort((a, b) => b.height - a.height)[0];
+      if (best) reportQuality(best.height, best.width);
       // 进度恢复改由 restoreAndStart 处理：duration 未就绪时不消费标记，挂事件重试
       void restoreAndStart();
     });
@@ -409,7 +421,7 @@ export function PlayerShell({
     // 注意 data.level 是档位下标，分辨率在 levelInfo 上
     hls.on(Hls.Events.LEVEL_LOADED, (_evt, data) => {
       const height = data.levelInfo?.height;
-      if (typeof height === 'number') reportQuality(height);
+      if (typeof height === 'number') reportQuality(height, data.levelInfo?.width);
     });
     // 分片真正进入 MSE buffer 才算媒体恢复：此时视频轨可渲染，错误态可解除
     hls.on(Hls.Events.FRAG_BUFFERED, () => {
@@ -609,7 +621,7 @@ export function PlayerShell({
      */
     const reportVideoHeight = () => {
       const height = art.video?.videoHeight;
-      if (typeof height === 'number' && height > 0) reportQuality(height);
+      if (typeof height === 'number' && height > 0) reportQuality(height, art.video?.videoWidth);
     };
     art.on('video:loadedmetadata', reportVideoHeight);
     art.on('video:canplay', reportVideoHeight);
@@ -974,19 +986,8 @@ export function PlayerShell({
   }, [adFilter]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full" aria-busy={showPoster && !error}>
       <div ref={containerRef} className="w-full h-full" style={{ WebkitTouchCallout: 'none' }} />
-      {showPoster && !error && (
-        <div
-          className="absolute inset-0 bg-black pointer-events-none"
-          style={{
-            backgroundImage: 'url(/player-poster.png)',
-            backgroundSize: 'contain',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-          }}
-        />
-      )}
       {!error && skipPrompt && (
         <button
           type="button"

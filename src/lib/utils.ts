@@ -100,6 +100,7 @@ export function buildWatchUrl(params: {
   title?: string;
   episodeUrl?: string;
   sourceUrl?: string;
+  sourceKind?: 'cms' | 'libvio';
   detail?: string;
 }): string {
   const sp = new URLSearchParams();
@@ -109,6 +110,7 @@ export function buildWatchUrl(params: {
   if (params.title) sp.set('title', params.title);
   if (params.episodeUrl) sp.set('url', params.episodeUrl);
   if (params.sourceUrl) sp.set('sourceUrl', params.sourceUrl);
+  if (params.sourceKind) sp.set('sourceKind', params.sourceKind);
   if (params.detail) sp.set('detail', params.detail);
   return `/watch?${sp.toString()}`;
 }

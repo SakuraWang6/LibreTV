@@ -43,6 +43,7 @@ function getSharedQueue(): ProbeQueue {
 
 const toEntry = (result: QualityProbeResult): QualityEntry => ({
   height: result.height,
+  width: result.width,
   from: 'probe',
   error: result.error,
   timestamp: Date.now(),

@@ -1,11 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import type { LibraryEntry } from '@/lib/local-library/types';
+import { PlaybackSourcePicker } from '@/components/switch-source';
+import { useToast } from '@/components/toast';
+import { buildPlaybackSwitchUrl, matchPlaybackEpisode, type PlaybackSelection } from '@/lib/playback-source';
 import { LibraryIcon, episodeLabel, percentPlayed, plainDescription, timeLabel, unfinished } from './library-ui';
 import styles from './library.module.css';
 
 export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry: LibraryEntry; episodes: LibraryEntry[]; onSelect: (id: string) => void; onProgress: (id: string, position: number, duration: number) => void }) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const video = useRef<HTMLVideoElement>(null);
   const playback = useRef({ loaded: false, position: 0, duration: 0 });
   const lastSaved = useRef({ position: entry.position || 0, duration: entry.duration || 0, sequence: 0 });
@@ -107,6 +115,18 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
     playback.current = { loaded: playback.current.loaded, position: element.currentTime, duration: element.duration };
   };
 
+  const onlineIdentity = { title: entry.title, kind: entry.kind, typeName: entry.kind === 'tv' ? '电视剧' : '电影',
+    year: entry.year, seasonNumber: entry.seasonNumber || 1, episodeNumber: entry.episodeNumber || 1 };
+  const switchOnline = (selection: PlaybackSelection) => {
+    const match = matchPlaybackEpisode(onlineIdentity, selection.result, selection.detail);
+    if (match.index === undefined) { toast(match.reason || '无法准确续接当前集', 'warning'); return; }
+    const media = video.current;
+    const position = playback.current.loaded && media ? media.currentTime : entry.position || 0;
+    if (media && playback.current.loaded) { syncPlayback(media); save(); media.pause(); }
+    queryClient.setQueryData(['detail', selection.source.key, selection.result.vodId, selection.source.url, selection.source.kind], selection.detail);
+    router.push(buildPlaybackSwitchUrl({ ...selection, index: match.index }, position, entry.id));
+  };
+
   return <div className={styles.playerLayout}>
     <div className={styles.playerMain}>
       <div className={styles.videoFrame}>
@@ -140,11 +160,12 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress }: { entry
       <p className={styles.detailMeta}>{[entry.year, entry.kind === 'tv' ? episodeLabel(entry) : entry.duration ? timeLabel(entry.duration) : ''].filter(Boolean).join(' · ')}</p>
       {entry.episodeTitle && <p className={styles.episodeTitle}>{entry.episodeTitle}</p>}
       {entry.description && <p className={styles.synopsis}>{plainDescription(entry.description)}</p>}
-    </aside>
-    {entry.kind === 'tv' && <section className={`${styles.episodeArea} ${styles.playerEpisodes}`} aria-label="剧集选择">
+    {entry.kind === 'tv' && <section className={styles.episodeArea} aria-label="剧集选择">
       <div className={styles.episodeHeading}><h2>选集</h2>{seasons.length > 1 ? <select aria-label="选择季" value={season} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((number) => <option key={number} value={number}>第 {number} 季</option>)}</select> : <span>第 {seasons[0]} 季</span>}</div>
       <div className={styles.episodeList}>{episodes.filter((item) => (item.seasonNumber || 1) === season).map((item, index) => <button key={item.id} className={item.id === entry.id ? styles.activeEpisode : ''} onClick={() => item.id !== entry.id && onSelect(item.id)} aria-current={item.id === entry.id ? 'true' : undefined}><span className={styles.episodeNumber}>{String(item.episodeNumber || index + 1).padStart(2, '0')}</span><span className={styles.episodeInfo}><strong>{item.episodeTitle || `第 ${item.episodeNumber || index + 1} 集`}</strong>{(item.id === entry.id || percentPlayed(item) >= 98 || unfinished(item)) && <small>{item.id === entry.id ? '正在播放' : percentPlayed(item) >= 98 ? '已看完' : `已观看 ${timeLabel(item.position)}`}</small>}</span>{item.id === entry.id ? <span className={styles.equalizer}><i /><i /><i /></span> : <LibraryIcon name="play" />}</button>)}</div>
     </section>}
+      <PlaybackSourcePicker identity={onlineIdentity} onSwitch={switchOnline} />
+    </aside>
   </div>;
 }
 

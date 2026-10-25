@@ -36,7 +36,7 @@ vi.mock('@/lib/quality-probe', () => ({
   probeQuality: vi.fn(async () => {
     state.calls++;
     if (state.abort) throw new DOMException('aborted', 'AbortError');
-    return { sourceKey: 'mock', vodId: 'mock', height: 1080 };
+    return { sourceKey: 'mock', vodId: 'mock', height: 1080, width: 1920 };
   }),
 }));
 
@@ -67,7 +67,7 @@ describe('POST /api/quality', () => {
     expect(state.calls).toBe(1);
     expect(data.results).toHaveLength(2);
     expect(data.results.map((r) => r.sourceKey).sort()).toEqual(['a', 'b']);
-    expect(data.results.every((r) => r.height === 1080)).toBe(true);
+    expect(data.results.every((r) => r.height === 1080 && r.width === 1920)).toBe(true);
   });
 
   it('探测完成后才写缓存；并发请求缓存未命中时也只会打一次源站', async () => {
@@ -83,7 +83,8 @@ describe('POST /api/quality', () => {
   it('第二次同 key 请求命中缓存：不再调 probeQuality', async () => {
     await POST(post([item('a', 'https://s.test/api')]));
     expect(state.calls).toBe(1);
-    await POST(post([item('a', 'https://s.test/api')]));
+    const cached = await POST(post([item('a', 'https://s.test/api')]));
+    expect((await cached.json()).results[0]).toMatchObject({ width: 1920, height: 1080 });
     expect(state.calls).toBe(1);
   });
 

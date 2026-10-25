@@ -1,5 +1,6 @@
 // 采集站（Apple CMS 资源站）描述
 export interface SourceConfig {
+  kind?: 'cms' | 'libvio';
   /** 唯一标识，如 "custom_0"；内置源直接用短名 */
   key: string;
   name: string;
@@ -11,6 +12,8 @@ export interface SourceConfig {
 }
 
 export interface SearchResultItem {
+  sourceKind?: 'cms' | 'libvio';
+  pageUrl?: string;
   sourceKey: string;
   sourceName: string;
   vodId: string;
@@ -42,6 +45,12 @@ export interface VideoInfo {
 
 export interface VideoDetail {
   episodes: string[];
+  episodeLabels?: string[];
+  episodeSeasons?: number[];
+  playbackType?: 'media' | 'external' | 'download-only' | 'browser-required' | 'unavailable';
+  pageUrl?: string;
+  message?: string;
+  externalLinks?: { label: string; url: string }[];
   videoInfo: VideoInfo;
 }
 
@@ -73,6 +82,7 @@ export interface SourceSearchOutcome {
  */
 export interface QualityEntry {
   height?: number;
+  width?: number;
   from: 'play' | 'probe';
   /**
    * 探测失败原因（如 `HTTP 403`、`请求超时`）。
@@ -95,6 +105,7 @@ export interface QualityProbeResult {
   sourceKey: string;
   vodId: string;
   height?: number;
+  width?: number;
   error?: string;
 }
 
@@ -112,6 +123,8 @@ export type SearchStreamEvent =
 
 export interface DoubanResponse {
   items: DoubanItem[];
+  nextPageStart?: number | null;
+  hasMore?: boolean;
 }
 
 export interface BangumiCalendarDay {

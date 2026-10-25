@@ -71,10 +71,10 @@ describe('POST /api/search', () => {
       failures: Array<{ sourceKey: string; error: string }>;
     };
 
-    // 源A 的 4 条 → 去重后 2 条有效 + 成人条目被过滤
+    // 重复、外传与成人条目不进入精确片名结果
     const aItems = data.list.filter((i) => i.sourceKey === 'a');
-    expect(aItems).toHaveLength(2);
-    expect(aItems.map((i) => i.vodId).sort()).toEqual(['1', '2']);
+    expect(aItems).toHaveLength(1);
+    expect(aItems.map((i) => i.vodId)).toEqual(['1']);
 
     // 源B 500 → 记入 failures，不影响源A 的结果
     expect(data.failures).toHaveLength(1);

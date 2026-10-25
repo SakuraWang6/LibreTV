@@ -3,11 +3,14 @@ import {
   looksLikeMp4,
   parseMp4VideoResolution,
   parseTsVideoResolution,
+  type MediaResolution,
 } from './codec-parse';
 import { cmsRequestHeaders, parseDetail, parseDetailPageHtml } from './cms-parser';
 import { fetchUpstream } from './fetch-utils';
-import { inferHeightFromBitrate } from './quality';
+import { inferHeightFromBitrate, qualityRank } from './quality';
 import { checkUpstreamAllowed } from './ssrf';
+import { isLibvioSource } from './providers/libvio/source';
+import { getLibvioDetail } from './providers/libvio/server';
 import type { QualityProbeItem, QualityProbeResult, SourceConfig } from './types';
 
 /**
@@ -50,33 +53,38 @@ export const QUALITY_PROBE_TIMEOUT_MS = 12000;
  */
 const SEGMENT_BUDGET_MS = 4000;
 
-/** 从 m3u8 文本解析最高档的短边高度；非 master playlist（无 STREAM-INF）返回 undefined */
-export function parseBestHeight(text: string): number | undefined {
+export interface ProbeResolution { height: number; width?: number }
+
+/** Keep the declared width and height together; bitrate-only variants have no width. */
+export function parseBestResolution(text: string): ProbeResolution | undefined {
   if (!text.includes('#EXT-X-STREAM-INF')) return undefined;
-  let best: number | undefined;
-  let pending: { bandwidth: number; height?: number } | undefined;
+  let best: ProbeResolution | undefined;
+  let pending: ProbeResolution | undefined;
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('#EXT-X-STREAM-INF')) {
       const bandwidth = parseInt(line.match(/BANDWIDTH=(\d+)/)?.[1] || '0', 10);
       const resolution = line.match(/RESOLUTION=(\d+)x(\d+)/);
-      // 取短边而非第二个数字：档位本就按短边定义（720P = 1280×720 的 720），
-      // 采集站常把宽高写反（如把 1280×720 写成 720x1280），按 height 取会得到 1280 → 标成 2K
-      pending = {
-        bandwidth,
-        height: resolution
-          ? Math.min(parseInt(resolution[1], 10), parseInt(resolution[2], 10))
-          : undefined,
-      };
+      const width = resolution ? Number(resolution[1]) : 0;
+      const height = resolution ? Number(resolution[2]) : 0;
+      pending = width > 0 && height > 0 ? { width, height }
+        : bandwidth > 0 ? { height: inferHeightFromBitrate(bandwidth) } : undefined;
       continue;
     }
     if (!line || line.startsWith('#') || !pending) continue;
-    // 只有 BANDWIDTH 的源站按常见转码参数反推高度，与播放器的档位命名口径一致
-    const height = pending.height ?? (pending.bandwidth > 0 ? inferHeightFromBitrate(pending.bandwidth) : undefined);
-    if (height && (best === undefined || height > best)) best = height;
+    const rank = qualityRank(pending.height, pending.width) ?? 0;
+    const bestRank = best ? qualityRank(best.height, best.width) ?? 0 : 0;
+    if (!best || rank > bestRank || (rank === bestRank && pending.width !== undefined
+      && (best.width === undefined || pending.height * pending.width > best.height * best.width))) best = pending;
     pending = undefined;
   }
   return best;
+}
+
+/** Legacy short-edge parser retained for callers that only need an orientation-safe height. */
+export function parseBestHeight(text: string): number | undefined {
+  const found = parseBestResolution(text);
+  return found?.width ? Math.min(found.height, found.width) : found?.height;
 }
 
 /** 媒体列表里解析分片所需的片段信息 */
@@ -240,7 +248,7 @@ async function probeSegmentResolution(
   playlistUrl: string,
   source: SourceConfig,
   signal: AbortSignal
-): Promise<number | undefined> {
+): Promise<MediaResolution | undefined> {
   const list = parseMediaPlaylist(text);
   if (!list.firstSegment) return undefined;
 
@@ -250,7 +258,7 @@ async function probeSegmentResolution(
     if (initUrl) {
       const buf = await fetchBytesPrefix(initUrl, INIT_PREFIX_BYTES, source, signal);
       const found = buf ? parseMp4VideoResolution(buf) : undefined;
-      if (found) return found.height;
+      if (found) return found;
     }
   }
 
@@ -270,12 +278,17 @@ async function probeSegmentResolution(
   }
 
   // 按内容判断容器比按扩展名可靠：不少源的分片没有扩展名
-  if (looksLikeMp4(buf)) return parseMp4VideoResolution(buf)?.height;
-  return parseTsVideoResolution(buf)?.height;
+  if (looksLikeMp4(buf)) return parseMp4VideoResolution(buf);
+  return parseTsVideoResolution(buf);
 }
 
 /** 取影片的播放地址列表（与 /api/detail 同逻辑：列表接口优先，拿不到再爬详情页） */
 async function fetchEpisodes(source: SourceConfig, id: string, signal: AbortSignal): Promise<string[]> {
+  if (isLibvioSource(source)) {
+    const detail = await getLibvioDetail(source, id, signal);
+    if (detail.playbackType !== 'media') throw new Error(detail.message || '请在 LIBVIO 原网页打开');
+    return detail.episodes;
+  }
   const api = `${source.url.replace(/\/+$/, '')}?ac=videolist&ids=${encodeURIComponent(id)}`;
   const res = await fetchUpstream(api, { timeoutMs: 6000, headers: cmsRequestHeaders(), signal });
   if (res.ok) {
@@ -322,7 +335,7 @@ async function probeEpisode(
   source: SourceConfig,
   merged: AbortSignal,
   signal?: AbortSignal
-): Promise<{ height?: number; error?: string }> {
+): Promise<{ height?: number; width?: number; error?: string }> {
   // 末尾允许 ?query / #fragment：不少源在 .m3u8 后挂鉴权参数或分片锚点
   const isM3u8 = /\.m3u8([?#]|$)/i.test(target);
 
@@ -330,7 +343,7 @@ async function probeEpisode(
     // mp4 直链：moov 里有分辨率。未 faststart 的文件 moov 在尾部，前缀拿不到 → 仍未知
     if (!/\.mp4([?#]|$)/i.test(target)) return {};
     const buf = await fetchBytesPrefix(target, SEGMENT_PREFIX_BYTES, source, merged);
-    return { height: buf ? parseMp4VideoResolution(buf)?.height : undefined };
+    return (buf ? parseMp4VideoResolution(buf) : undefined) ?? {};
   }
 
   const res = await fetchUpstream(target, {
@@ -341,11 +354,11 @@ async function probeEpisode(
   if (!res.ok) return { error: `HTTP ${res.status}` };
   const text = await readTextPrefix(res, M3U8_MAX_BYTES);
 
-  const height = parseBestHeight(text);
-  if (height !== undefined) return { height };
+  const resolution = parseBestResolution(text);
+  if (resolution) return resolution;
 
   // 单码率媒体列表：m3u8 里没有档位信息，下沉到分片挖分辨率
-  return { height: await withSegmentBudget(target, text, source, merged, signal) };
+  return (await withSegmentBudget(target, text, source, merged, signal)) ?? {};
 }
 
 /**
@@ -377,7 +390,7 @@ export async function probeQuality(item: QualityProbeItem, signal?: AbortSignal)
     let lastError: string | undefined;
     for (const target of probeEpisodeOrder(episodes)) {
       const r = await probeEpisode(target, source, merged, signal);
-      if (r.height !== undefined) return { ...base, height: r.height };
+      if (r.height !== undefined) return { ...base, height: r.height, width: r.width };
       if (r.error) lastError = r.error;
       // 源站级拒绝（401/403）换集也不会变，不必再耗一轮超时
       if (lastError && /^HTTP (401|403)$/.test(lastError)) break;
@@ -405,7 +418,7 @@ async function withSegmentBudget(
   source: SourceConfig,
   merged: AbortSignal,
   clientSignal?: AbortSignal
-): Promise<number | undefined> {
+): Promise<MediaResolution | undefined> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException('分片解析超时', 'TimeoutError')), SEGMENT_BUDGET_MS);
   try {

@@ -5,20 +5,20 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Header, requestShowSettings } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
-import { DetailModal } from '@/components/detail-modal';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
 import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
-import { cn, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
+import { buildWatchUrl, cn, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
+import { LoadMoreTrigger } from '@/components/load-more-trigger';
 
 /**
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
- * 搜索状态由 React Query 管理，失败源在结果区顶部以非阻塞方式展示。
+ * 搜索状态由 React Query 管理，结果随请求结算逐步显示。
  */
 /** 搜索结果分批渲染的批大小：一次挂载上千张卡片会明显掉帧 */
 const RESULT_PAGE_SIZE = 60;
@@ -45,7 +45,6 @@ function HomeContent() {
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
   const [input, setInput] = useState(urlQuery);
-  const [detailItem, setDetailItem] = useState<SearchResultItem | null>(null);
   /** 流式搜索中已结算的源（data 就绪前用于增量渲染） */
   const [streamedOutcomes, setStreamedOutcomes] = useState<SourceSearchOutcome[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -76,19 +75,6 @@ function HomeContent() {
       // 所属订阅被整体停用的源同样跳过（无损：各源勾选状态保留，重新启用即恢复）
       .filter((s) => !isInDisabledSubscription({ subscriptions }, s.key));
   }, [customAPIs, envSources, selectedKeys, sourceHealth, subscriptions]);
-  const disabledSources = useMemo(
-    () => selectedKeys.filter((key) => isSourceDisabled({ sourceHealth }, key)),
-    [selectedKeys, sourceHealth]
-  );
-  // 来自已关闭订阅的源：勾选状态还在，但本次搜索用不到，必须明确告知
-  const offSubscriptionSources = useMemo(
-    () =>
-      selectedKeys.filter(
-        (key) => !isSourceDisabled({ sourceHealth }, key) && isInDisabledSubscription({ subscriptions }, key)
-      ),
-    [selectedKeys, sourceHealth, subscriptions]
-  );
-
   const searchQuery = useQuery({
     queryKey: ['search', urlQuery, selectedKeys, yellowFilter],
     // 与 runSearch 的截断规则保持一致：顶栏搜索 / 手动构造长链接不会绕过上限
@@ -154,13 +140,18 @@ function HomeContent() {
     streamedOutcomes
       .filter((o) => !o.ok)
       .map((o) => ({ sourceKey: o.sourceKey, error: o.error || '请求失败', timedOut: o.timedOut }));
-  // 跨源同名聚合：同名影片合并为一张卡片，展开后可选择具体来源
+  // 同名影片只显示一张海报，来源选择留在播放页。
   const groups = useMemo(() => aggregateResults(list), [list]);
 
-  // 分批渲染：新一次搜索（groups 变化）时重置回首批
+  // 流式结果追加时保留已展开的分页，只有新搜索才重置。
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
   const visibleGroups = useMemo(() => groups.slice(0, visibleCount), [groups, visibleCount]);
-  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [groups]);
+  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [urlQuery, selectedKeys, yellowFilter]);
+
+  const openVideo = (item: SearchResultItem) => {
+    const source = resolveSource({ customAPIs, envSources }, item.sourceKey, { url: item.sourceUrl, name: item.sourceName });
+    router.push(buildWatchUrl({ sourceKey: item.sourceKey, sourceKind: item.sourceKind || source?.kind, vodId: item.vodId, index: 0, title: item.name, sourceUrl: source?.url || item.sourceUrl, detail: source?.detail }));
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -271,71 +262,29 @@ function HomeContent() {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm text-muted">
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
-                {isSearching ? (
-                  <span className="text-faint">
-                    （已就绪 {streamedOutcomes.length}/{selectedSources.length} 个源…）
-                  </span>
-                ) : (
-                  searchQuery.data && (
-                    <span className="text-faint">
-                      （{groups.length} 部影片 · {list.length} 条结果{failures.length > 0 && `，${failures.length} 个源失败`}）
-                    </span>
-                  )
-                )}
+                <span className="ml-2 text-faint">{isSearching ? '搜索中…' : searchQuery.data ? `${groups.length} 部` : ''}</span>
               </h2>
             </div>
-
-            {failures.length > 0 && (
-              <div className="mb-3 text-xs bg-chip rounded-lg px-3 py-2 flex flex-wrap gap-x-3 gap-y-1">
-                <span className="text-faint">{isSearching ? '以下源暂时无响应：' : '部分点播源请求失败：'}</span>
-                {failures.map((f) => (
-                  <span key={f.sourceKey} className={f.timedOut ? 'text-warning' : 'text-faint'}>
-                    {f.timedOut ? '⏱' : '✗'} {sourceName(f.sourceKey)}
-                    {f.timedOut ? ' 超时' : ''}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {disabledSources.length > 0 && (
-              <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                已停用：{disabledSources.map((key) => sourceName(key)).join('、')}
-              </div>
-            )}
-
-            {offSubscriptionSources.length > 0 && (
-              <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                订阅已停用：{offSubscriptionSources.map((key) => sourceName(key)).join('、')}
-              </div>
-            )}
 
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
             ) : list.length > 0 ? (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-x-4 gap-y-7 items-start">
                   {visibleGroups.map((group) => (
                     <AggregatedCard
                       key={group.key}
                       group={group}
-                      sources={selectedSources}
-                      onOpen={(item) => setDetailItem(item)}
+                      onOpen={openVideo}
                     />
                   ))}
                 </div>
-                {groups.length > visibleCount && (
-                  <div className="flex justify-center mt-4">
-                    <button
-                      className="btn-ghost btn-sm"
-                      onClick={() => setVisibleCount((v) => v + RESULT_PAGE_SIZE)}
-                    >
-                      加载更多（还有 {groups.length - visibleCount} 部）
-                    </button>
-                  </div>
-                )}
+                <LoadMoreTrigger hasMore={groups.length > visibleCount} itemCount={visibleGroups.length} onLoad={() => setVisibleCount((count) => count + RESULT_PAGE_SIZE)} />
               </>
             ) : isSearching ? (
               <ResultsSkeleton />
+            ) : searchQuery.isError || (selectedSources.length > 0 && failures.length >= selectedSources.length) ? (
+              <div className="py-16 text-center"><p className="text-sm text-faint">搜索暂时不可用</p><button className="btn-ghost mt-3 min-h-11 text-xs" onClick={() => void searchQuery.refetch()}>重试</button></div>
             ) : (
               <EmptyState
                 icon="search"
@@ -358,28 +307,17 @@ function HomeContent() {
         )}
       </main>
 
-
-      <DetailModal item={detailItem} onClose={() => setDetailItem(null)} />
     </div>
   );
 }
 
 function ResultsSkeleton() {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        // 结构对齐真实结果卡（左侧缩略图 + 右侧文字块），避免占位与真实卡片形状不符
-        <div key={i} className="card flex h-28 overflow-hidden">
-          <div className="w-[105px] sm:w-[120px] shrink-0 bg-chip animate-pulse" />
-          <div className="flex-1 p-2.5 space-y-2">
-            <div className="h-4 w-3/4 rounded bg-chip animate-pulse" />
-            <div className="h-3 w-1/2 rounded bg-chip animate-pulse" />
-            <div className="h-3 w-full rounded bg-chip animate-pulse" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  return <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-x-4 gap-y-7" aria-label="正在搜索">
+    {Array.from({ length: 12 }).map((_, index) => <div key={index}>
+      <div className="aspect-[2/3] rounded-lg bg-chip animate-pulse" />
+      <div className="mx-auto mt-3 h-3 w-3/4 rounded bg-chip animate-pulse" />
+    </div>)}
+  </div>;
 }
 
 /** 无点播源 / 未勾选点播源时的引导（替代旧版首屏静默空白） */

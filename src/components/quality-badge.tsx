@@ -48,7 +48,7 @@ export function QualityBadge({
         className={cn(
           'tag font-medium shrink-0',
           // 高画质给强调色；≤480 的标清退到 faint，让它在「源名 / 画质 / 集数」里自然后置
-          height >= 1080 ? 'bg-accent/15 text-accent' : height > 0 && height < 480 ? 'bg-chip text-faint' : 'bg-chip text-muted',
+          ['4K', '2K', '1080P'].includes(view.label || '') ? 'bg-accent/15 text-accent' : height > 0 && height < 480 ? 'bg-chip text-faint' : 'bg-chip text-muted',
           className
         )}
         title={view.title}

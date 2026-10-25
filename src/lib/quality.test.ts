@@ -11,7 +11,7 @@ import {
   qualityLabel,
   summarizeQuality,
 } from './quality';
-import { parseBestHeight, parseMediaPlaylist } from './quality-probe';
+import { parseBestHeight, parseBestResolution, parseMediaPlaylist } from './quality-probe';
 import type { QualityEntry } from './types';
 
 /** master playlist 样例：三档，其中一个只有 BANDWIDTH 没有 RESOLUTION */
@@ -53,6 +53,23 @@ describe('qualityLabel', () => {
     expect(qualityLabel(144)).toBe('144P');
     expect(qualityLabel(240)).toBe('240P');
     expect(qualityLabel(800)).toBe('720P');
+  });
+
+  it('宽银幕按真实长边归档，保留裁剪后的实际高度', () => {
+    expect(qualityLabel(1608, 3840)).toBe('4K');
+    expect(qualityLabel(800, 1920)).toBe('1080P');
+    expect(qualityLabel(1080, 1920)).toBe('1080P');
+  });
+
+  it('竖屏取正确档位，过窄全景与缺失尺寸不凭长边抬档', () => {
+    expect(qualityLabel(1920, 1080)).toBe('1080P');
+    expect(qualityLabel(1280, 720)).toBe('720P');
+    expect(qualityLabel(3840, 720)).toBe('720P');
+    expect(qualityLabel(400, 3840)).not.toBe('4K');
+    expect(qualityLabel(800, undefined)).toBe('720P');
+    expect(qualityLabel(800, Number.NaN)).toBe('720P');
+    expect(qualityLabel(Number.NaN, 3840)).toBeUndefined();
+    expect(qualityLabel(undefined, 3840)).toBeUndefined();
   });
 
   it('缺失或非法高度返回 undefined（前端据此显示「未知」）', () => {
@@ -114,6 +131,18 @@ seg0.ts
 720p/index.m3u8
 `;
     expect(parseBestHeight(text)).toBe(720);
+  });
+});
+
+describe('parseBestResolution', () => {
+  it('保留同一变体的3840×1608，不把真实高度改成2160', () => {
+    const text = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=2560x1440\n2k.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=3500000,RESOLUTION=3840x1608\n4k.m3u8';
+    expect(parseBestResolution(text)).toEqual({ width: 3840, height: 1608 });
+  });
+
+  it('竖屏声明保留原宽高，而仅码率的清单不会伪造宽度', () => {
+    expect(parseBestResolution('#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=720x1280\np.m3u8')).toEqual({ width: 720, height: 1280 });
+    expect(parseBestResolution('#EXT-X-STREAM-INF:BANDWIDTH=6000000\np.m3u8')).toEqual({ height: 1080 });
   });
 });
 
@@ -222,6 +251,23 @@ describe('mergeQualityEntries', () => {
     expect(back[KEY].height).toBe(1080);
   });
 
+  it('实测保留最佳的完整宽高对，不把两个样本拼成不存在的分辨率', () => {
+    const cropped: QualityEntry = { from: 'play', height: 1608, width: 3840, timestamp: T };
+    const taller: QualityEntry = { from: 'play', height: 1800, width: 3200, timestamp: T };
+    const next = mergeQualityEntries({ [KEY]: cropped }, { [KEY]: taller }, T + 1000);
+    expect(next[KEY]).toMatchObject({ height: 1608, width: 3840 });
+    const full: QualityEntry = { from: 'play', height: 2160, width: 3840, timestamp: T + 2000 };
+    expect(mergeQualityEntries(next, { [KEY]: full }, T + 2000)[KEY]).toMatchObject({ height: 2160, width: 3840 });
+  });
+
+  it('新实测可补上同高度的宽度，但不会向未知宽度拼上旧样本的width', () => {
+    const known: QualityEntry = { from: 'play', height: 800, width: 1920, timestamp: T };
+    expect(mergeQualityEntries({ [KEY]: play(800) }, { [KEY]: known }, T + 1000)[KEY]).toMatchObject({ height: 800, width: 1920 });
+    const next = mergeQualityEntries({ [KEY]: known }, { [KEY]: play(2160) }, T + 2000)[KEY];
+    expect(next.height).toBe(2160);
+    expect(next.width).toBeUndefined();
+  });
+
   it('已有明确档位时，不被「测不出」的探测抹掉', () => {
     const current = { [KEY]: probe(1080) };
     const next = mergeQualityEntries(current, { [KEY]: probe() }, T + 1000);
@@ -287,6 +333,13 @@ describe('describeQualityBadge', () => {
     expect(describeQualityBadge(entry({ height: 1080, from: 'probe' }))?.title).toContain('播放列表');
   });
 
+  it('宽银幕徽章显示4K且tooltip是实际像素', () => {
+    const view = describeQualityBadge(entry({ height: 1608, width: 3840, from: 'play' }));
+    expect(view?.label).toBe('4K');
+    expect(view?.title).toContain('3840×1608');
+    expect(view?.title).not.toContain('2160P');
+  });
+
   it('无高度无错误 = 未知，且不可重试（源站本就不给信息）', () => {
     const view = describeQualityBadge(entry());
     expect(view).toMatchObject({ kind: 'unknown', retryable: false });
@@ -328,6 +381,11 @@ describe('summarizeQuality', () => {
 
   it('全部测不出时没有 best，但仍是有效结论（total 计入）', () => {
     expect(summarizeQuality([probe(), probe()])).toEqual({ best: undefined, known: 0, failed: 0, total: 2 });
+  });
+
+  it('汇总比较完整宽高的档位，不只比较原始高度', () => {
+    const cropped: QualityEntry = { height: 1608, width: 3840, from: 'play', timestamp: T };
+    expect(summarizeQuality([probe(1800), cropped]).best).toBe('4K');
   });
 
   it('实测与探测混合时取较大值（实测可把单码率源补上）', () => {

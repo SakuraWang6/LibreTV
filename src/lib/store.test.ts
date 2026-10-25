@@ -15,6 +15,19 @@ const store = () => useAppStore.getState();
 
 const list = (urls: string[]): Omit<SourceConfig, 'key'>[] => urls.map((url) => ({ name: url, url }));
 
+describe('width-aware quality cache migration', () => {
+  it('clears old quality snapshots once and preserves source and playback preferences', async () => {
+    const migrate = useAppStore.persist.getOptions().migrate!;
+    const original = { selectedKeys: ['a'], customAPIs: [{ key: 'a', name: 'A', url: 'https://example.com' }],
+      adFilter: false, qualityMap: { 'a:1': { height: 1608, from: 'play', timestamp: 1 } } };
+    const migrated = await migrate(original, 8);
+    expect(migrated).toMatchObject({ selectedKeys: original.selectedKeys, customAPIs: original.customAPIs, adFilter: false, qualityMap: {} });
+    const current = { ...original, qualityMap: { 'a:1': { height: 1608, width: 3840, from: 'play', timestamp: 1 } } };
+    expect(await migrate(current, 9)).toMatchObject({ qualityMap: current.qualityMap });
+    expect(original.qualityMap['a:1'].height).toBe(1608);
+  });
+});
+
 beforeEach(() => {
   useAppStore.setState({
     customAPIs: [],

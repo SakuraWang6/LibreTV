@@ -114,12 +114,17 @@ export default function LibraryIndex() {
     const readLocation = () => {
       const params = new URLSearchParams(window.location.search);
       const kind = params.get('kind');
-      if (kind === 'movie' || kind === 'tv') setFilter(kind);
+      setFilter(kind === 'movie' || kind === 'tv' ? kind : 'all');
+      setLibraryView(params.get('view') === 'server' ? 'server' : 'local');
     };
     readLocation();
     window.addEventListener('popstate', readLocation);
     return () => window.removeEventListener('popstate', readLocation);
   }, []);
+
+  useEffect(() => {
+    if (syncStatus && !syncStatus.enabled) setLibraryView('local');
+  }, [syncStatus]);
 
   const selectEntry = useCallback((id: string) => {
     router.push(`/library/play/${encodeURIComponent(id)}`);

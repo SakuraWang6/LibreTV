@@ -17,7 +17,8 @@ export async function GET(req: Request) {
 
   try {
     const items = await fetchDoubanRecommend(type, tag, pageStart, pageSize);
-    return NextResponse.json({ items });
+    const hasMore = items.length === pageSize;
+    return NextResponse.json({ items, hasMore, nextPageStart: hasMore ? pageStart + items.length : null });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : '豆瓣推荐获取失败' },
