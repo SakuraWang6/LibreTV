@@ -1,11 +1,19 @@
 node_modules/
 .next/
 out/
+/dist/
 .env
 .env*.local
 *.tsbuildinfo
 vitest-results.json
 *.log
+
+# macOS、Python 与浏览器调试的可再生产物
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+.playwright-cli/
 
 # AI 工具产物（本机会话/缓存数据，不入库）
 .mimosa/

@@ -1,9 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '@/lib/client-api';
-import { QUALITY_FAIL_TTL_MS, isRetryableTimeout, qualityKey, summarizeQuality } from '@/lib/quality';
-import { createProbeQueue, type ProbeQueue } from '@/lib/quality-probe-queue';
+import { QUALITY_FAIL_TTL_MS, isRetryableTimeout, qualityKey } from '@/lib/quality';
 import { readQualities, useAppStore } from '@/lib/store';
 import type { QualityEntry, QualityProbeItem, QualityProbeResult, SourceConfig } from '@/lib/types';
 
@@ -14,31 +13,6 @@ export interface QualityProbeTarget {
   /** 源配置缺失时的兜底地址（搜索结果自带）；缺 detail，走不了详情页降级 */
   sourceUrl?: string;
   sourceName?: string;
-}
-
-export interface QualityProbeProgress {
-  /** 本轮目标数 */
-  total: number;
-  /** 已拿到终态（有档位 / 未知 / 失败）的数量 */
-  done: number;
-  /** 拿到分辨率的数量 */
-  known: number;
-  /** 探测失败的数量 */
-  failed: number;
-  /** 已探到的最高档位 */
-  best?: string;
-}
-
-/**
- * 单源卡片的探测必须共用同一个队列：每张卡片各建一个队列等于没有限流。
- * 队列只在浏览器里跑，模块级单例足够（SSR 不会调用 push）。
- */
-let sharedQueue: ProbeQueue | null = null;
-function getSharedQueue(): ProbeQueue {
-  sharedQueue ??= createProbeQueue({
-    run: (items, onResult, signal) => api.qualityProbeStream(items, onResult, signal),
-  });
-  return sharedQueue;
 }
 
 const toEntry = (result: QualityProbeResult): QualityEntry => ({
@@ -62,19 +36,12 @@ const dedupeByKey = (items: QualityProbeTarget[]): QualityProbeTarget[] => {
 };
 
 /**
- * 画质探测控制器。
- *
- * 三种入口共用同一份状态与冷却规则：
- * - `probe`：一次 POST 流式探测一批（多源卡片展开、换源面板）；
- * - `probeQueued`：交给全局队列（单源卡片进入视口），并发 2、每批 8 条；
- * - `retry`：绕过失败冷却重探（徽章点击）。
- *
+ * 换源面板的画质探测控制器：读取缓存，按批次流式探测并处理失败冷却。
  * 结果一律写回 `useAppStore.setQuality`，换页面/再次搜索时可复用（TTL 与 LRU 由 store 负责）。
  */
 export function useQualityProbe(sources?: SourceConfig[]) {
   const [qualities, setQualities] = useState<Record<string, QualityEntry>>({});
   const [probing, setProbing] = useState<Record<string, true>>({});
-  const [targets, setTargets] = useState<QualityProbeTarget[]>([]);
 
   /** 在飞键：防同一个键并发重复请求 */
   const inflightRef = useRef<Set<string>>(new Set());
@@ -83,8 +50,6 @@ export function useQualityProbe(sources?: SourceConfig[]) {
   /** 当前直连批次：被下一批掐掉时靠它解锁未完成的键 */
   const batchRef = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
-  /** 交给全局队列、尚未返回的键：卸载时从队列里撤回 */
-  const queuedRef = useRef<Set<string>>(new Set());
   const mountedRef = useRef(true);
   /**
    * probe 需要读最新的 qualities 判断「是否已有结论」，但把 qualities 放进依赖会让
@@ -100,13 +65,9 @@ export function useQualityProbe(sources?: SourceConfig[]) {
 
   useEffect(() => {
     mountedRef.current = true;
-    // Set 实例只在首次渲染创建，捕获它就能在卸载时读到最新内容（避免 lint 的 ref 快照警告）
-    const queued = queuedRef.current;
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
-      if (queued.size > 0) getSharedQueue().cancel([...queued]);
-      queued.clear();
     };
   }, []);
 
@@ -163,10 +124,9 @@ export function useQualityProbe(sources?: SourceConfig[]) {
     []
   );
 
-  /** 读取缓存并把目标登记为「进度分母」：卡片收起时也能显示最高画质 */
+  /** 先读取已有画质，让换源面板展示缓存结果。 */
   const prime = useCallback((items: QualityProbeTarget[]) => {
     const list = dedupeByKey(items);
-    setTargets(list);
     if (list.length === 0) return;
     const cached = readQualities(list.map((i) => ({ sourceKey: i.sourceKey, vodId: i.vodId })));
     if (Object.keys(cached).length > 0) setQualities((prev) => ({ ...cached, ...prev }));
@@ -176,7 +136,6 @@ export function useQualityProbe(sources?: SourceConfig[]) {
     (items: QualityProbeTarget[], opts?: { force?: boolean }) => {
       const list = dedupeByKey(items);
       if (list.length === 0) return;
-      setTargets(list);
 
       const cached = readQualities(list.map((i) => ({ sourceKey: i.sourceKey, vodId: i.vodId })));
       setQualities((prev) => ({ ...cached, ...prev }));
@@ -274,95 +233,5 @@ export function useQualityProbe(sources?: SourceConfig[]) {
   // 延迟重试走的入口：scheduleTimeoutRetry 的定时器里不能直接用 probe（会捕获旧闭包）
   probeRef.current = probe;
 
-  /**
-   * 经全局队列探测（单源卡片进入视口）。
-   * 不阻塞渲染、不打断直连批次：队列自己限并发，这里只负责把结果摊到本卡片上。
-   */
-  const probeQueued = useCallback(
-    (items: QualityProbeTarget[]) => {
-      const list = dedupeByKey(items);
-      if (list.length === 0) return;
-      setTargets(list);
-
-      const cached = readQualities(list.map((i) => ({ sourceKey: i.sourceKey, vodId: i.vodId })));
-      setQualities((prev) => ({ ...cached, ...prev }));
-
-      const now = Date.now();
-      const pending = list.filter((target) => {
-        const key = qualityKey(target.sourceKey, target.vodId);
-        if (inflightRef.current.has(key)) return false;
-        const known = cached[key];
-        if (known && !known.error) return false;
-        const last = settledRef.current.get(key);
-        return last === undefined || now - last > QUALITY_FAIL_TTL_MS;
-      });
-
-      const mapped = pending
-        .map((target) => {
-          const item = resolveItem(target);
-          return item ? { key: qualityKey(target.sourceKey, target.vodId), item } : undefined;
-        })
-        .filter((v): v is { key: string; item: QualityProbeItem } => Boolean(v));
-      if (mapped.length === 0) return;
-
-      const keys = mapped.map((m) => m.key);
-      for (const key of keys) {
-        inflightRef.current.add(key);
-        queuedRef.current.add(key);
-      }
-
-      void getSharedQueue()
-        // 「探测中」在批次真正发出时才点亮：排队还没轮到就显示转圈是在说谎
-        .push(mapped.map((m) => m.item), () => {
-          if (mountedRef.current) mark(keys, true);
-        })
-        .then((results) => {
-          const collected: Record<string, QualityEntry> = {};
-          for (const result of Object.values(results)) {
-            const key = qualityKey(result.sourceKey, result.vodId);
-            collected[key] = toEntry(result);
-            settledRef.current.set(key, Date.now());
-          }
-          // 「已取消」只说明我们没等，不是源站的回答：展示可以，但不该污染长期缓存
-          const writable = Object.fromEntries(
-            Object.entries(collected).filter(([, entry]) => entry.error !== '探测已取消')
-          );
-          if (mountedRef.current) setQualities((prev) => ({ ...prev, ...collected }));
-          if (Object.keys(writable).length > 0) useAppStore.getState().setQuality(writable);
-        })
-        // 队列内部已兜住所有失败，这里只防意外异常变成 unhandled rejection
-        .catch(() => {})
-        .finally(() => {
-          for (const key of keys) {
-            inflightRef.current.delete(key);
-            queuedRef.current.delete(key);
-          }
-          if (mountedRef.current) mark(keys, false);
-        });
-    },
-    [mark, resolveItem]
-  );
-
-  /** 绕过失败冷却重探：只有用户明确点「重试」才走这里 */
-  const retry = useCallback(
-    (items: QualityProbeTarget[]) => {
-      for (const item of items) settledRef.current.delete(qualityKey(item.sourceKey, item.vodId));
-      probe(items, { force: true });
-    },
-    [probe]
-  );
-
-  const progress = useMemo<QualityProbeProgress>(() => {
-    const entries = targets.map((t) => qualities[qualityKey(t.sourceKey, t.vodId)]);
-    const summary = summarizeQuality(entries);
-    return {
-      total: targets.length,
-      done: summary.total,
-      known: summary.known,
-      failed: summary.failed,
-      best: summary.best,
-    };
-  }, [targets, qualities]);
-
-  return { qualities, probing, progress, prime, probe, probeQueued, retry };
+  return { qualities, probing, prime, probe };
 }

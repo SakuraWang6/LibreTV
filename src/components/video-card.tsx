@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import type { SearchResultItem } from '@/lib/types';
 import { useAppStore } from '@/lib/store';
-import { formatRemarks } from '@/lib/remarks';
 import type { AggregatedGroup } from './video-card-aggregation';
 export { aggregateResults } from './video-card-aggregation';
 import { SmartImage } from './smart-image';
@@ -15,11 +14,6 @@ export function AggregatedCard({ group, onOpen }: { group: AggregatedGroup; onOp
   if (!item) return null;
   return <PosterCard title={group.name} cover={group.pic} onClick={() => onOpen(item)}
     metadata={[group.year, group.typeName, group.remarks].filter(Boolean).join(' · ')} />;
-}
-
-export function VideoCard({ item, onClick }: { item: SearchResultItem; onClick: () => void }) {
-  return <PosterCard title={item.name} cover={item.pic} onClick={onClick}
-    metadata={[item.year, item.typeName, formatRemarks(item.remarks)].filter(Boolean).join(' · ')} />;
 }
 
 export function DoubanCard({ item, onClick }: { item: { title: string; cover: string; rating?: string }; onClick: () => void }) {

@@ -3,7 +3,13 @@ node_modules
 **/node_modules
 .next
 out
+dist
 tsconfig.tsbuildinfo
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.DS_Store
+.playwright-cli
 
 # 版本控制与 CI
 .git
