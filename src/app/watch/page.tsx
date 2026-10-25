@@ -285,10 +285,9 @@ function WatchContent() {
           <HomeButton />
           <div className="min-w-0">
             <h1 className="text-sm font-medium text-content truncate">{videoTitle}</h1>
-            <p className="text-xs text-faint">
-              {source.name}
-              {episodes.length > 0 && ` · 第 ${currentIndex + 1}/${episodes.length} 集`}
-            </p>
+            {episodes.length > 0 && (
+              <p className="text-xs text-faint">第 {currentIndex + 1}/{episodes.length} 集</p>
+            )}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button

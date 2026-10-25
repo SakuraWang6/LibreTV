@@ -340,7 +340,7 @@ function HomeContent() {
               <EmptyState
                 icon="search"
                 title="没有找到匹配的结果"
-                description="请尝试其他关键词或更换点播源"
+                description=""
                 className="!py-16"
               />
             )}

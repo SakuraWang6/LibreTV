@@ -9,11 +9,10 @@ import {
   PauseResumeController,
   clearDownloadChunks,
   runDownloadJob,
-  supportsChunkCache,
   type DownloadProgress,
 } from '@/lib/m3u8-downloader';
 import { loadDownloadSettings, saveDownloadSettings } from '@/lib/download-settings';
-import { detectSavingCapability, pickSaveTarget, type SaveTarget } from '@/lib/download-saver';
+import { pickSaveTarget, type SaveTarget } from '@/lib/download-saver';
 import { cleanupInterruptedLibraryUploads, fetchLibrary, guessLibraryMetadata } from '@/lib/local-library/client';
 import { LOCAL_LIBRARY_UPDATED_EVENT, type LibraryMetadata } from '@/lib/local-library/types';
 import { changeBackgroundDownload, createBackgroundDownload, fetchBackgroundDownloads, removeBackgroundDownload } from '@/lib/background-downloads-client';
@@ -51,8 +50,6 @@ interface RunningHandle {
 export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const [tasks, setTasks] = useState<DownloadTaskEntry[]>([]);
-  const [capability, setCapability] = useState<'fs-access' | 'memory'>('memory');
-  const [chunkCache, setChunkCache] = useState(true);
   const [proxy, setProxy] = useState(false);
   // A separate target per task prevents queued downloads from overwriting each other's file handle.
   const targets = useRef(new Map<string, SaveTarget>());
@@ -238,7 +235,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           if (useLibrary) {
             await createBackgroundDownload(detail.url, detail.libraryMetadata ?? guessLibraryMetadata(detail.title));
             await refreshBackground();
-            toast(`《${detail.title}》已加入后台下载，关闭窗口后会继续`, 'success');
+            toast(`《${detail.title}》已加入下载队列`, 'success');
             return;
           }
           target = await pickSaveTarget(`${detail.title}.${format.toLowerCase()}`);
@@ -268,8 +265,6 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   useEffect(() => {
     if (!isOpen) return;
-    setCapability(detectSavingCapability());
-    setChunkCache(supportsChunkCache());
     setProxy(loadDownloadSettings().proxy);
     refresh();
     if (libraryEnabled) void refreshBackground();
@@ -278,7 +273,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   const onToggleProxy = (next: boolean) => {
     setProxy(saveDownloadSettings({ proxy: next }).proxy);
-    toast(next ? '已开启下载中转，新任务经服务器转发' : '已关闭下载中转，新任务直连源站', 'info');
+    toast(next ? '已开启下载中转' : '已关闭下载中转', 'info');
   };
 
   const onPauseResume = async (entry: DownloadTaskEntry) => {
@@ -358,7 +353,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
       if (action === 'remove') {
         await removeBackgroundDownload(task.id);
         setBackgroundTasks((previous) => previous.filter((entry) => entry.id !== task.id));
-        toast('下载记录已移除，已入库的视频会保留', 'info');
+        toast('下载记录已移除', 'info');
       } else {
         await changeBackgroundDownload(task.id, action);
         toast(action === 'retry' ? '已重新加入后台下载队列' : '已请求取消后台下载', 'info');
@@ -388,10 +383,8 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         {libraryEnabled && backgroundError && <p className="text-xs text-danger" role="status">{backgroundError}</p>}
         {libraryEnabled && workerOnline === false && !backgroundError && <p className="text-xs text-warning" role="status">后台服务未连接</p>}
         {!libraryEnabled && <p className="text-xs text-faint">
-          保存能力：{capability === 'fs-access' ? '磁盘直写（边下边存）' : '内存聚合（完成后浏览器下载）'}
-          {chunkCache ? ' · 支持断点续传' : ' · 当前环境无断点缓存（需 HTTPS 访问）'} ·
-          同时进行 {Math.min(running.current.size, MAX_CONCURRENT_DOWNLOADS)}/{MAX_CONCURRENT_DOWNLOADS} 个任务
-          <span className="block mt-1">浏览器下载需保持窗口打开。</span>
+          浏览器下载 · {Math.min(running.current.size, MAX_CONCURRENT_DOWNLOADS)}/{MAX_CONCURRENT_DOWNLOADS} 进行中
+          <span className="block mt-1">请勿关闭下载页面</span>
         </p>}
         {tasks.length === 0 && backgroundTasks.length === 0 && (
           <div className="py-10 text-center text-sm text-faint">
@@ -410,7 +403,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
                   <p className="text-xs text-faint">MP4 · {backgroundStatusLabel[task.status]}{task.status === 'downloading' && task.total > 0 ? ` · ${progress}%` : ''}{task.bytes > 0 ? ` · ${(task.bytes / 1024 / 1024).toFixed(1)} MB` : ''}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  {task.status === 'completed' && task.libraryItemId && <Link href={`/library?play=${encodeURIComponent(task.libraryItemId)}`} onClick={onClose} className="px-2 py-1 rounded bg-chip hover:bg-hover text-xs text-content">播放</Link>}
+                  {task.status === 'completed' && task.libraryItemId && <Link href={`/library/play/${encodeURIComponent(task.libraryItemId)}`} onClick={onClose} className="px-2 py-1 rounded bg-chip hover:bg-hover text-xs text-content">播放</Link>}
                   {(task.status === 'failed' || task.status === 'cancelled') && <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'retry')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">重试</button>}
                   {active ? <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'cancel')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">取消</button>
                     : <button type="button" aria-label="移除下载记录" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'remove')} className="p-1.5 rounded bg-chip hover:bg-hover disabled:opacity-50 text-content"><Icon name="close" className="w-4 h-4" /></button>}

@@ -27,8 +27,9 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
   const searchHistory = useSearchHistory(query);
-  const inLibrary = pathname.startsWith('/library');
-  const title = inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
+  const inLibrary = pathname === '/library';
+  const inLibraryPlayer = pathname.startsWith('/library/play/');
+  const title = inLibraryPlayer ? '播放' : inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -82,7 +83,6 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
   return <>
     {sidebarOpen && <button type="button" className="mac-sidebar-overlay" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
     <aside id="app-sidebar" className={cn('mac-sidebar', sidebarOpen && 'is-open')} aria-label="主导航" role={sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOpen || undefined}>
-      <div className="mac-window-controls" aria-hidden="true"><i /><i /><i /></div>
       <Link href="/library" className="mac-brand" onClick={() => setSidebarOpen(false)}><span className="mac-brand-icon"><Icon name="film" /></span><strong>LibreTV</strong></Link>
       <nav className="mac-sidebar-nav">
         <p className="mac-nav-label">浏览</p>
@@ -101,7 +101,7 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
     </aside>
     <header className="mac-appbar">
       <div className="mac-toolbar-leading"><IconButton label="显示侧栏" onClick={() => setSidebarOpen(!sidebarOpen)} expanded={sidebarOpen} className="mac-sidebar-toggle"><Icon name="sidebar" /></IconButton><span className="mac-toolbar-title">{title}</span></div>
-      {(showSearch || !inLibrary) && pathname !== '/' && <form className="mac-toolbar-search" onSubmit={(event) => { event.preventDefault(); submitSearch(query); }}><div ref={searchHistory.containerRef} className="relative"><Icon name="search" /><input value={query} onChange={(event) => { setQuery(event.target.value); searchHistory.resetActive(); }} onFocus={searchHistory.onFocus} onKeyDown={(event) => searchHistory.onKeyDown(event, pickHistory)} placeholder="搜索影片" aria-label="搜索影片" role="combobox" aria-expanded={searchHistory.visible} aria-controls="header-search-history" aria-autocomplete="list" aria-activedescendant={searchHistory.visible && searchHistory.activeIndex >= 0 ? `header-search-history-${searchHistory.activeIndex}` : undefined} />{searchHistory.visible && <SearchHistoryDropdown id="header-search-history" matches={searchHistory.matches} activeIndex={searchHistory.activeIndex} onPick={pickHistory} onRemove={searchHistory.remove} onClearAll={searchHistory.clearAll} />}</div></form>}
+      {(showSearch || (!inLibrary && !inLibraryPlayer)) && pathname !== '/' && <form className="mac-toolbar-search" onSubmit={(event) => { event.preventDefault(); submitSearch(query); }}><div ref={searchHistory.containerRef} className="relative"><Icon name="search" /><input value={query} onChange={(event) => { setQuery(event.target.value); searchHistory.resetActive(); }} onFocus={searchHistory.onFocus} onKeyDown={(event) => searchHistory.onKeyDown(event, pickHistory)} placeholder="搜索影片" aria-label="搜索影片" role="combobox" aria-expanded={searchHistory.visible} aria-controls="header-search-history" aria-autocomplete="list" aria-activedescendant={searchHistory.visible && searchHistory.activeIndex >= 0 ? `header-search-history-${searchHistory.activeIndex}` : undefined} />{searchHistory.visible && <SearchHistoryDropdown id="header-search-history" matches={searchHistory.matches} activeIndex={searchHistory.activeIndex} onPick={pickHistory} onRemove={searchHistory.remove} onClearAll={searchHistory.clearAll} />}</div></form>}
       <div className="mac-toolbar-actions"><ThemeToggle /><IconButton label="下载管理" onClick={requestShowDownloadManager}><Icon name="download" /></IconButton><IconButton label="设置" onClick={() => setSettingsOpen(true)}><Icon name="gear" /></IconButton></div>
     </header>
     <SourceManagerDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
