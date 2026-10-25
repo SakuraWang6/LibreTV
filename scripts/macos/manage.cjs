@@ -119,7 +119,7 @@ async function stop() {
   const state = readState();
   if (ownsProcess(state)) {
     process.kill(state.pid, 'SIGTERM');
-    for (let attempt = 0; attempt < 40 && ownsProcess(state); attempt++) await sleep(250);
+    for (let attempt = 0; attempt < 80 && ownsProcess(state); attempt++) await sleep(250);
     if (ownsProcess(state)) throw new Error(`进程 ${state.pid} 未完成退出，请检查日志；未强制终止其他进程。`);
   }
   if (!ownsProcess(readState())) fs.rmSync(stateFile, { force: true });
@@ -174,7 +174,9 @@ async function run() {
       stopping = true;
       browserStopped = stopBrowser?.();
       for (const child of children) child.kill('SIGTERM');
-      killTimer = setTimeout(() => { for (const child of children) child.kill('SIGKILL'); }, 8000);
+      // Official Quark downloads save their chunks on SIGINT before the worker
+      // exits. Leave time for that child and its bounded checkpoint cleanup.
+      killTimer = setTimeout(() => { for (const child of children) child.kill('SIGKILL'); }, 15000);
       killTimer.unref();
     };
     process.on('SIGTERM', terminate);

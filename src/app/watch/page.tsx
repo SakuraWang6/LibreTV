@@ -40,6 +40,8 @@ import {
 } from '@/lib/db';
 import { cn } from '@/lib/utils';
 import { movieDownloadMetadata } from './download-metadata';
+import { QuarkShareDownloader } from '@/components/quark-share-downloader';
+import { isQuarkShareUrl } from '@/lib/quark-client';
 
 /**
  * 播放页（唯一入口，替代旧版 watch.html → player.html 跳转链）。
@@ -435,7 +437,6 @@ function WatchContent() {
                     <div className="text-center px-6 max-w-md">
                       <p className="text-faint text-sm">{detailQuery.data?.message || (detailQuery.isError ? '视频加载失败，可以在右侧选择其他播放源' : '此条目没有可直接播放的视频')}</p>
                       {source && vodId && <button type="button" className="btn-ghost btn-sm mt-3" disabled={detailQuery.isFetching} onClick={() => { void detailQuery.refetch(); }}>{detailQuery.isFetching ? '重试中…' : '重试'}</button>}
-                      {detailQuery.data?.externalLinks?.filter((link) => /^https?:\/\//i.test(link.url)).map((link) => <a key={link.url} className="btn-ghost btn-sm mt-3 inline-flex" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>)}
                       {detailQuery.data?.pageUrl && /^https?:\/\//i.test(detailQuery.data.pageUrl) && <a className="btn-ghost btn-sm mt-3 inline-flex" href={detailQuery.data.pageUrl} target="_blank" rel="noopener noreferrer">在原网站打开</a>}
                     </div>
                   )}
@@ -443,6 +444,15 @@ function WatchContent() {
               )}
             </div>
             {linkedSaveError && <p className="text-xs text-danger mt-2" role="status">本地进度保存失败</p>}
+            {detailQuery.data?.externalLinks && detailQuery.data.externalLinks.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
+              {detailQuery.data.externalLinks.filter((link) => /^https?:\/\//i.test(link.url)).map((link) => isQuarkShareUrl(link.url)
+                ? <QuarkShareDownloader key={link.url} url={link.url} metadata={{
+                  title: videoInfo?.title || videoTitle, kind: isMultipartMovie(detailQuery.data) ? 'movie' : isSeries ? 'tv' : 'movie', year: videoInfo?.year,
+                  description: videoInfo?.desc, coverUrl: videoInfo?.cover, sourceName: videoInfo?.sourceName || source.name,
+                  ...(isSeries && !isMultipartMovie(detailQuery.data) ? { seasonNumber: identity.seasonNumber } : {}),
+                }} />
+                : <a key={link.url} className="btn-ghost btn-sm" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>)}
+            </div>}
 
             {/* 操作栏 */}
             <div className="flex flex-wrap items-center gap-2 mt-3">

@@ -35,6 +35,10 @@ const ADD_TASK_EVENT = 'libretv:add-download';
 const SHOW_MANAGER_EVENT = 'libretv:show-download-manager';
 export const DOWNLOADS_UPDATED_EVENT = 'libretv:downloads-updated';
 
+function formatDownloadBytes(bytes: number): string {
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(Math.max(0, bytes) / 1024 ** 2).toFixed(1)} MB`;
+}
+
 export interface AddDownloadPayload {
   url: string;
   title: string;
@@ -346,10 +350,10 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   const backgroundStatusLabel: Record<BackgroundDownloadStatus, string> = {
     queued: '排队中', downloading: '后台下载中', processing: '整理视频并入库',
-    completed: '已入库', failed: '失败', cancelled: '已取消',
+    completed: '已入库', failed: '失败', cancelled: '已取消', paused: '已暂停',
   };
 
-  const onBackgroundAction = async (task: BackgroundDownloadTask, action: 'cancel' | 'retry' | 'remove') => {
+  const onBackgroundAction = async (task: BackgroundDownloadTask, action: 'cancel' | 'retry' | 'pause' | 'resume' | 'remove') => {
     if (busyTasks.has(task.id)) return;
     setBusyTasks((previous) => new Set(previous).add(task.id));
     try {
@@ -358,8 +362,11 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         setBackgroundTasks((previous) => previous.filter((entry) => entry.id !== task.id));
         toast('下载记录已移除', 'info');
       } else {
-        await changeBackgroundDownload(task.id, action);
-        toast(action === 'retry' ? '已重新加入后台下载队列' : '已请求取消后台下载', 'info');
+        const changed = await changeBackgroundDownload(task.id, action);
+        toast(changed.status === 'completed' ? '视频已加入影视库'
+          : action === 'pause' ? '后台下载已暂停'
+            : action === 'resume' ? '已继续后台下载'
+              : action === 'retry' ? '已重新加入后台下载队列' : '已请求取消后台下载', 'info');
       }
       await refreshBackground();
     } catch (error) {
@@ -398,17 +405,20 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           const active = ['queued', 'downloading', 'processing'].includes(task.status);
           const progress = task.total > 0 ? Math.min(100, Math.round(task.finished / task.total * 100)) : 0;
           const episode = task.metadata.kind === 'tv' ? task.metadata.episodeTitle || (task.metadata.episodeNumber ? `第 ${task.metadata.episodeNumber} 集` : '') : '';
+          const quarkTask = 'provider' in task && task.provider === 'quark';
           return (
             <div key={task.id} className="card p-3 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm text-content truncate">{task.title}{episode ? ` · ${episode}` : ''}</p>
-                  <p className="text-xs text-faint">MP4 · {backgroundStatusLabel[task.status]}{task.status === 'downloading' && task.total > 0 ? ` · ${progress}%` : ''}{task.bytes > 0 ? ` · ${(task.bytes / 1024 / 1024).toFixed(1)} MB` : ''}</p>
+                  <p className="text-xs text-faint">{quarkTask ? '夸克' : 'MP4'} · {backgroundStatusLabel[task.status]}{(task.status === 'downloading' || task.status === 'paused') && task.total > 0 ? ` · ${progress}%` : ''}{quarkTask && task.total > 0 ? ` · ${formatDownloadBytes(task.finished)} / ${formatDownloadBytes(task.total)}` : task.bytes > 0 ? ` · ${formatDownloadBytes(task.bytes)}` : ''}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {task.status === 'completed' && task.libraryItemId && <Link href={`/library/play/${encodeURIComponent(task.libraryItemId)}`} onClick={onClose} className="px-2 py-1 rounded bg-chip hover:bg-hover text-xs text-content">播放</Link>}
                   {(task.status === 'failed' || task.status === 'cancelled') && <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'retry')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">重试</button>}
-                  {active ? <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'cancel')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">取消</button>
+                  {active && <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'pause')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">暂停</button>}
+                  {task.status === 'paused' && <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'resume')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">继续</button>}
+                  {active || task.status === 'paused' ? <button type="button" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'cancel')} className="px-2 py-1 rounded bg-chip hover:bg-hover disabled:opacity-50 text-xs text-content">取消</button>
                     : <button type="button" aria-label="移除下载记录" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'remove')} className="p-1.5 rounded bg-chip hover:bg-hover disabled:opacity-50 text-content"><Icon name="close" className="w-4 h-4" /></button>}
                 </div>
               </div>

@@ -3,13 +3,23 @@ import path from 'node:path';
 import { constants } from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
-import { createUpload, appendUpload, completeUpload, cancelUpload } from '@/lib/local-library/server';
+import { createUpload, appendUpload, completeUpload, cancelUpload, getLibraryEntry } from '@/lib/local-library/server';
 import { createMediaPlan, downloadResource, remuxLocal, maxJobBytes, requireFreeSpace, type MediaPlan } from './media';
 import { allStoredTasks, atomicJson, downloadsRoot, mutateTask, readTask, type StoredTask } from './store';
 import { downloadFailureMessage } from './error-message';
+import { cleanupQuarkDownload, downloadQuarkMedia } from '@/lib/quark/download';
 
 interface WorkTask extends StoredTask { uploadReady?: boolean }
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+class DownloadPausedError extends Error {
+  constructor() { super('后台下载已暂停'); }
+}
+
+function requireTaskActive(task: StoredTask): void {
+  if (task.cancelRequested || task.status === 'cancelled') throw new Error('下载已取消');
+  if (task.pauseRequested || task.status === 'paused') throw new DownloadPausedError();
+}
 
 async function workDirectory(id: string): Promise<string> {
   let directory = await downloadsRoot();
@@ -30,14 +40,20 @@ async function cleanupUpload(task: WorkTask): Promise<void> {
   await mutateTask(task.id, (entry) => { delete entry.uploadId; delete (entry as WorkTask).uploadReady; });
 }
 
-async function cleanupCancelled(task: WorkTask): Promise<void> {
+async function cleanupCancelled(task: WorkTask): Promise<boolean> {
+  const directory = path.join(await downloadsRoot(), 'work', task.id);
+  if (task.quark) {
+    try { await cleanupQuarkDownload(directory); }
+    catch { return false; } // The CLI may be busy; preserve ownership and retry later.
+  }
   await cleanupUpload(task);
-  await fs.rm(path.join(await downloadsRoot(), 'work', task.id), { recursive: true, force: true });
+  await fs.rm(directory, { recursive: true, force: true });
   await mutateTask(task.id, (entry) => {
     // A retry may already have moved the job back into the queue.
     if (entry.status !== 'cancelled' && !entry.cancelRequested) return;
-    entry.status = 'cancelled'; entry.cancelRequested = false; entry.finished = 0; entry.bytes = 0; delete entry.error;
+    entry.status = 'cancelled'; entry.cancelRequested = false; entry.pauseRequested = false; entry.finished = 0; entry.bytes = 0; delete entry.error;
   });
+  return true;
 }
 
 async function loadPlan(directory: string, task: WorkTask, signal: AbortSignal): Promise<MediaPlan> {
@@ -65,49 +81,79 @@ async function loadPlan(directory: string, task: WorkTask, signal: AbortSignal):
 async function markCompleted(id: string, libraryItemId: string): Promise<void> {
   await mutateTask(id, (entry) => {
     entry.status = 'completed'; entry.finished = entry.total; entry.libraryItemId = libraryItemId;
-    entry.cancelRequested = false; delete entry.error; delete entry.uploadId; delete (entry as WorkTask).uploadReady;
+    entry.cancelRequested = false; entry.pauseRequested = false; delete entry.error; delete entry.uploadId; delete (entry as WorkTask).uploadReady;
   });
   await fs.rm(path.join(await downloadsRoot(), 'work', id), { recursive: true, force: true });
 }
 
-export async function processTask(id: string, signal: AbortSignal): Promise<void> {
+async function commitUpload(id: string, uploadId: string, signal: AbortSignal): Promise<void> {
+  // The same task lock serializes pause/cancel with the library commit. A pause
+  // accepted before this point prevents publication; an already committed film
+  // wins a later pause/cancel without deleting or publishing it twice.
+  await mutateTask(id, async (entry) => {
+    requireTaskActive(entry); signal.throwIfAborted();
+    const completed = await completeUpload(uploadId);
+    entry.status = 'completed'; entry.finished = entry.total; entry.libraryItemId = completed.item.id;
+    entry.cancelRequested = false; entry.pauseRequested = false;
+    delete entry.error; delete entry.uploadId; delete (entry as WorkTask).uploadReady;
+  });
+  await fs.rm(path.join(await downloadsRoot(), 'work', id), { recursive: true, force: true });
+}
+
+async function processActiveTask(id: string, signal: AbortSignal): Promise<void> {
   const requireActive = async () => {
+    requireTaskActive(await readTask(id));
     signal.throwIfAborted();
-    if ((await readTask(id)).cancelRequested) throw new Error('下载已取消');
   };
-  let task = await readTask(id) as WorkTask;
+  const task = await readTask(id) as WorkTask;
   // If a crash happened after the library commit but before queue commit, reuse
-  // that upload id. completeUpload is idempotent and never creates a second item.
-  if (task.uploadId && task.uploadReady) {
-    const result = await completeUpload(task.uploadId);
-    await markCompleted(id, result.item.id);
-    return;
+  // that upload id. Merely having ready staging must not publish a paused task.
+  if (task.uploadId) {
+    try {
+      const committed = await getLibraryEntry(task.uploadId);
+      await markCompleted(id, committed.id);
+      return;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
-  if (task.cancelRequested || task.status === 'cancelled') { await cleanupCancelled(task); return; }
-  await cleanupUpload(task);
+  await requireActive();
+  if (task.uploadId && task.uploadReady) { await commitUpload(id, task.uploadId, signal); return; }
   const directory = await workDirectory(id);
-  await mutateTask(id, (entry) => { entry.status = 'downloading'; delete entry.error; });
-  const plan = await loadPlan(directory, task, signal);
-  await mutateTask(id, (entry) => { entry.total = plan.resources.length; entry.finished = 0; entry.bytes = 0; });
-  let bytes = 0;
-  for (let index = 0; index < plan.resources.length; index++) {
+  let media = path.join(directory, 'result.mp4');
+  // A paused library copy resumes its existing staging offset. Resources and
+  // the already remuxed result also survive a worker restart.
+  if (!task.uploadId) {
+    await mutateTask(id, (entry) => { requireTaskActive(entry); entry.status = 'downloading'; delete entry.error; });
+    let plan: MediaPlan;
+    if (task.quark) {
+      plan = await downloadQuarkMedia(task.quark, directory, signal, async (bytes, total) => {
+        await mutateTask(id, (entry) => { requireTaskActive(entry); entry.finished = bytes; entry.total = total; entry.bytes = bytes; });
+      });
+    } else {
+      plan = await loadPlan(directory, task, signal);
+      await mutateTask(id, (entry) => { requireTaskActive(entry); entry.total = plan.resources.length; entry.finished = 0; entry.bytes = 0; });
+      let bytes = 0;
+      for (let index = 0; index < plan.resources.length; index++) {
+        await requireActive();
+        bytes += await downloadResource(plan.resources[index], directory, signal, bytes, task.mediaContext);
+        if (bytes > maxJobBytes()) throw new Error('该视频超过单个任务的空间限制');
+        await mutateTask(id, (entry) => { entry.finished = index + 1; entry.bytes = bytes; });
+      }
+    }
     await requireActive();
-    bytes += await downloadResource(plan.resources[index], directory, signal, bytes, task.mediaContext);
-    if (bytes > maxJobBytes()) throw new Error('该视频超过单个任务的空间限制');
-    await mutateTask(id, (entry) => { entry.finished = index + 1; entry.bytes = bytes; });
+    await mutateTask(id, (entry) => { requireTaskActive(entry); entry.status = 'processing'; });
+    media = await remuxLocal(plan, directory, signal);
   }
   await requireActive();
-  await mutateTask(id, (entry) => { entry.status = 'processing'; });
-  const media = await remuxLocal(plan, directory, signal);
-  await requireActive();
-  const uploadId = crypto.randomBytes(16).toString('hex');
+  const uploadId = task.uploadId ?? crypto.randomBytes(16).toString('hex');
   // Persist ownership before creating library staging, so even a power loss
   // between the two writes cannot orphan an untracked partial upload.
-  await mutateTask(id, (entry) => { entry.uploadId = uploadId; });
+  await mutateTask(id, (entry) => { requireTaskActive(entry); entry.status = 'processing'; entry.uploadId = uploadId; });
   const upload = await createUpload({ metadata: task.metadata, format: 'MP4' }, uploadId);
   const input = await fs.open(media, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    let offset = 0;
+    const stat = await input.stat();
+    if (!stat.isFile() || upload.offset > stat.size) throw new Error('入库暂存大小与整理后的视频不一致');
+    let offset = upload.offset;
     const buffer = Buffer.alloc(1024 * 1024);
     while (true) {
       await requireActive();
@@ -120,15 +166,32 @@ export async function processTask(id: string, signal: AbortSignal): Promise<void
   } finally { await input.close(); }
   await requireActive();
   await mutateTask(id, (entry) => {
-    if (entry.cancelRequested) throw new Error('下载已取消');
+    requireTaskActive(entry);
     (entry as WorkTask).uploadReady = true;
   });
-  const completed = await completeUpload(upload.id);
-  // Completion owns the race with cancellation: the committed film is kept and
-  // shown as completed. Cancellation only ever removes uncommitted staging.
-  await markCompleted(id, completed.item.id);
-  task = await readTask(id) as WorkTask;
-  if (task.status !== 'completed') throw new Error('影视库提交未完成');
+  await commitUpload(id, upload.id, signal);
+}
+
+export async function processTask(id: string, signal: AbortSignal): Promise<void> {
+  try { await processActiveTask(id, signal); }
+  catch (error) {
+    const latest = await readTask(id) as WorkTask;
+    if (latest.status === 'completed') return;
+    if (latest.cancelRequested || latest.status === 'cancelled') { await cleanupCancelled(latest); return; }
+    if (latest.pauseRequested || latest.status === 'paused' || error instanceof DownloadPausedError || signal.reason instanceof DownloadPausedError) {
+      const stopped = await mutateTask(id, (entry) => {
+        if (entry.status === 'completed' || entry.cancelRequested || entry.status === 'cancelled') return;
+        if (entry.pauseRequested || entry.status === 'paused') {
+          entry.status = 'paused'; entry.pauseRequested = false;
+        }
+        // A quick resume may have queued the task before this request stopped.
+        // Leave that queued state intact so the next pass uses fresh signals.
+      });
+      if (stopped.cancelRequested || stopped.status === 'cancelled') await cleanupCancelled(stopped);
+      return;
+    }
+    throw error;
+  }
 }
 
 async function claimWorker(root: string): Promise<() => Promise<void>> {
@@ -177,7 +240,7 @@ export async function runWorker(): Promise<void> {
     while (!stopping) {
       const tasks = await allStoredTasks();
       const cleanup = tasks.find((task) => task.status === 'cancelled' && task.cancelRequested);
-      if (cleanup) { await cleanupCancelled(cleanup); continue; }
+      if (cleanup) { if (!await cleanupCancelled(cleanup)) await pause(1500); continue; }
       const task = tasks.find((entry) => ['queued', 'downloading', 'processing'].includes(entry.status));
       if (!task) { await pause(1500); continue; }
       active = new AbortController();
@@ -186,6 +249,7 @@ export async function runWorker(): Promise<void> {
       const cancellation = setInterval(() => {
         void readTask(task.id).then((entry) => {
           if (entry.cancelRequested || entry.status === 'cancelled') current.abort(new Error('下载已取消'));
+          else if (entry.pauseRequested || entry.status === 'paused') current.abort(new DownloadPausedError());
         }).catch(() => current.abort(new Error('下载记录不可用')));
       }, 500);
       try { await processTask(task.id, current.signal); }
@@ -195,12 +259,16 @@ export async function runWorker(): Promise<void> {
         if (latest.status === 'completed') continue;
         if (latest.cancelRequested || latest.status === 'cancelled') await cleanupCancelled(latest);
         else {
-          await cleanupUpload(latest);
           const safeReason = downloadFailureMessage(error);
-          await mutateTask(task.id, (entry) => {
-            if (entry.cancelRequested) { entry.status = 'cancelled'; return; }
+          const failed = await mutateTask(task.id, (entry) => {
+            if (entry.status === 'completed') return;
+            if (entry.cancelRequested || entry.status === 'cancelled') { entry.status = 'cancelled'; return; }
+            // A pause may arrive after processTask inspected the failure but
+            // before this queue update. Never discard its library staging.
+            if (entry.pauseRequested || entry.status === 'paused') { entry.status = 'paused'; entry.pauseRequested = false; return; }
             entry.status = 'failed'; entry.error = safeReason; entry.cancelRequested = false;
           });
+          if (failed.status === 'failed') await cleanupUpload(failed);
         }
       } finally { clearTimeout(deadline); clearInterval(cancellation); active = undefined; }
     }

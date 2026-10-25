@@ -34,7 +34,7 @@ export async function createBackgroundDownload(url: string, metadata: LibraryMet
   return result.task;
 }
 
-export async function changeBackgroundDownload(id: string, action: 'cancel' | 'retry'): Promise<BackgroundDownloadTask> {
+export async function changeBackgroundDownload(id: string, action: 'cancel' | 'retry' | 'pause' | 'resume'): Promise<BackgroundDownloadTask> {
   const result = await request<{ task: BackgroundDownloadTask }>(`/api/downloads/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
   if (result.task?.id !== id) throw new Error('后台下载未确认操作结果，请刷新任务列表');
   return result.task;
