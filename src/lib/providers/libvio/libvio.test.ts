@@ -45,6 +45,57 @@ describe('bounded public LIBVIO HTML parser', () => {
     expect(isLibvioChallenge('403 Forbidden: browser verification required')).toBe(true);
     expect(isLibvioChallenge('<h1>电影验证码</h1>')).toBe(false);
   });
+  it('limits search to the result list and excludes history and recommendation anchors', () => {
+    const html = `<nav><a href="/detail/999.html" title="历史影片">历史影片</a></nav>
+      <ul class="stui-vodlist clearfix"><li><a class="stui-vodlist__thumb" href="/detail/714891136.html" title="流浪地球2" data-original="https://images.example.test/earth.jpg"><span class="pic-text text-right">4KHDR</span></a><h4><a href="/detail/714891136.html">流浪地球2</a></h4></li></ul>
+      <h3><a>猜你喜欢</a></h3><ul class="stui-vodlist"><li><a href="/detail/888.html" title="不相关推荐">不相关推荐</a></li></ul>`;
+    expect(parseLibvioSearch(html, source)).toEqual([expect.objectContaining({ vodId: '714891136', name: '流浪地球2', remarks: '4KHDR', pic: 'https://images.example.test/earth.jpg' })]);
+    expect(parseLibvioSearch('<ul class="stui-vodlist"></ul><h3>猜你喜欢</h3><a href="/detail/888.html">推荐</a>', source)).toEqual([]);
+  });
+
+  it('extracts real detail fields before recommendations and prefers h1 over an SEO title', () => {
+    const html = `<meta property="og:title" content="错误的SEO标题 - LIBVIO"><div class="vod-poster"><img id="js-poster-img" data-original="https://images.example.test/marvel.jpg"></div>
+      <div class="vod-info"><h1 class="title">惊奇队长</h1><div class="vod-meta"><span class="meta-item">动作,科幻,冒险,电影</span><span class="meta-item">美国,澳大利亚</span><span class="meta-item">2019</span><span class="meta-item">上映 2019-03-08</span><span class="meta-item">更新 2026-08-09</span></div>
+      <div class="vod-meta"><span class="meta-item">主演：布丽·拉尔森,裘德·洛,</span></div><div class="vod-meta"><span class="meta-item">导演：安娜·波顿,瑞安·弗雷克</span></div>
+      <p class="vod-desc"><span class="detail-sketch">摘要</span><span class="detail-content">完整简介 &amp; 更多。</span><a>展开</a></p></div>
+      <ul class="stui-content__playlist"><li><a href="/w/653-1-1.html">1080P</a></li></ul><h3>猜你喜欢</h3><a href="/w/653-9-9.html">推荐</a>`;
+    const parsed = parseLibvioDetail(html, source, '653');
+    expect(parsed.detail.videoInfo).toMatchObject({ title: '惊奇队长', year: '2019', typeName: '动作,科幻,冒险,电影', area: '美国,澳大利亚', actor: '布丽·拉尔森,裘德·洛', director: '安娜·波顿,瑞安·弗雷克', desc: '完整简介 & 更多。', cover: 'https://images.example.test/marvel.jpg' });
+    expect(parsed.watchPages).toEqual([{ url: 'https://libvio.host/w/653-1-1.html', label: '正片' }]);
+  });
+
+  it('reads a rendered same-origin known player iframe without treating quality text as an episode number', () => {
+    const media = 'https://v.vimsec.app/2026/dy/8/Captain.Marvel/Captain.Marvel.2019.1080P_fixed.mp4';
+    const html = `<nav><a href="/w/653-1-1.html">历史标题</a></nav><div class="stui-player__detail"><h1>惊奇队长</h1><div class="data-more"><p><span>主演：</span><a>布丽·拉尔森</a>&nbsp;<a>裘德·洛</a></p><p>导演：安娜·波顿</p><p>类型：动作,科幻,电影&nbsp;&nbsp;地区：美国,澳大利亚&nbsp;&nbsp;年份：2019</p><p>简介：这是完整的电影简介。</p></div></div>
+      <ul class="stui-play__list"><li><a href="/w/653-1-1.html">1080P</a></li></ul><iframe src="/vid/plyr/vr2.php?url=${media}&amp;next=&amp;id=653&amp;nid=1"></iframe>`;
+    const { detail } = parseLibvioDetail(html, source, '653', 'https://libvio.host/w/653-1-1.html');
+    expect(detail).toMatchObject({ episodes: [media], episodeLabels: ['正片'], playbackType: 'media', mediaContext: 'libvio' });
+    expect(detail.videoInfo).toMatchObject({ title: '惊奇队长', year: '2019', typeName: '动作,科幻,电影', area: '美国,澳大利亚', actor: '布丽·拉尔森 裘德·洛', desc: '这是完整的电影简介。' });
+  });
+
+  it('keeps explicit TV season and episode identity without confusing a playback-line number with a season', () => {
+    const html = `<div class="vod-info"><h1>某剧 第二季</h1><div class="vod-meta"><span class="meta-item">国产剧</span><span class="meta-item">中国大陆</span><span class="meta-item">2024</span></div></div><ul class="stui-play__list"><li><a href="/w/123-7-3.html">03</a></li><li><a href="/w/123-7-4.html">第4-5集</a></li></ul><iframe src="/vid/plyr/vr2.php?url=https%3A%2F%2Fcdn.example.test%2Fs2e3.m3u8"></iframe>`;
+    const parsed = parseLibvioDetail(html, source, '123', 'https://libvio.host/w/123-7-3.html');
+    expect(parsed.detail).toMatchObject({ episodeLabels: ['第3集'], episodeSeasons: [2], mediaContext: 'libvio' });
+    expect(parsed.watchPages.map((item) => item.label)).toEqual(['第3集', '第4-5集']);
+  });
+
+  it('refuses arbitrary iframe origins, wrapper paths, nested parsers, duplicate parameters and private targets', () => {
+    const target = 'https://cdn.example.test/film.mp4';
+    const frames = [
+      `https://evil.test/vid/plyr/vr2.php?url=${target}`,
+      `https://www.libvio.to/vid/plyr/vr2.php?url=${target}`,
+      `/arbitrary/parser.php?url=${target}`,
+      `/vid/plyr/vr2.php?url=https://parser.example.test/?url=${target}`,
+      `/vid/plyr/vr2.php?url=${target}&url=https://cdn.example.test/other.mp4`,
+      '/vid/plyr/vr2.php?url=http://127.0.0.1/private.mp4',
+      '/vid/plyr/vr2.php?url=javascript:alert(1)',
+    ];
+    for (const frame of frames) expect(parseLibvioDetail(`<iframe src="${frame}"></iframe>`, source, '653').detail.episodes).toEqual([]);
+    const external = parseLibvioDetail('<iframe src="/vid/plyr/vr2.php?url=https://pan.quark.cn/s/share"></iframe>', source, '653').detail;
+    expect(external.playbackType).toBe('external'); expect(external.episodes).toEqual([]); expect(external.mediaContext).toBeUndefined();
+  });
+
   it('keeps provider identity in env/subscription/share paths without enabling any default source', () => {
     vi.stubEnv('DEFAULT_SOURCES', JSON.stringify([source]));
     expect(getEnvSources()[0].kind).toBe('libvio');
@@ -95,9 +146,9 @@ describe('ordinary public request dispatch and honest access states', () => {
     vi.stubGlobal('fetch', fetcher);
     const { getLibvioDetail } = await import('./server');
     const detail = await getLibvioDetail(source, '123');
-    expect(detail.episodes).toEqual(['https://cdn.example.test/one.m3u8', 'https://cdn.example.test/two.m3u8']);
+    expect(detail.episodes).toEqual(['https://cdn.example.test/one.m3u8', '']);
     expect(detail.episodeLabels).toEqual(['第1集', '第2集']);
     expect(fetcher.mock.calls.every(([url]) => !url.includes('/w/456') && !url.includes('/w/123-2-'))).toBe(true);
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

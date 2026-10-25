@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { syncWorkerEnvironment } = require('../library-sync-environment.cjs');
 const { localWebServer } = require('./local-auth.cjs');
+const { superviseBrowser } = require('./optional-browser.cjs');
 
 const root = path.resolve(__dirname, '../..');
 const manager = __filename;
@@ -162,6 +163,8 @@ async function run() {
   fs.writeFileSync(stateFile, JSON.stringify({ pid: process.pid, token, root, startedAt: new Date().toISOString() }), { flag: 'wx', mode: 0o600 });
   const children = [];
   let killTimer;
+  let stopBrowser;
+  let browserStopped;
   let stopping = false;
   const cleanup = () => { clearTimeout(killTimer); forgetState(token); };
   process.once('exit', cleanup);
@@ -169,6 +172,7 @@ async function run() {
     const terminate = () => {
       if (stopping) return;
       stopping = true;
+      browserStopped = stopBrowser?.();
       for (const child of children) child.kill('SIGTERM');
       killTimer = setTimeout(() => { for (const child of children) child.kill('SIGKILL'); }, 8000);
       killTimer.unref();
@@ -179,6 +183,17 @@ async function run() {
     const commands = [web.args];
     if (process.env.LOCAL_LIBRARY_DIR && process.env.BACKGROUND_DOWNLOADS_ENABLED !== '0') commands.push([path.join(root, 'scripts/background-worker.cjs')]);
     if (process.env.LIBRARY_SERVER_URL) commands.push([path.join(root, 'scripts/library-sync-worker.cjs')]);
+    if (process.env.LIBVIO_BROWSER_SOCKET && fs.existsSync(path.join(root, 'scripts/libvio-browser/node_modules/playwright-core/package.json'))) {
+      const environment = { ...process.env, NODE_ENV: 'production' };
+      delete environment.LIBRETV_LOCAL_AUTH_BIND;
+      stopBrowser = superviseBrowser({
+        spawn, executable: process.execPath, args: [path.join(root, 'scripts/libvio-browser/service.cjs')],
+        options: { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: environment },
+        onSpawn: (child) => children.push(child),
+        onExit: (child) => { const index = children.indexOf(child); if (index >= 0) children.splice(index, 1); },
+        log: console.error,
+      });
+    }
     // The login service owns every child. A failed worker restarts the group,
     // keeping a healthy web page from hiding a stopped background queue.
     await Promise.all(commands.map((args) => new Promise((resolve) => {
@@ -199,6 +214,8 @@ async function run() {
         resolve();
       });
     })));
+    // Keep the group's SIGKILL deadline alive until the optional child exits too.
+    await browserStopped;
   } finally { cleanup(); }
 }
 

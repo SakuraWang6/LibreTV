@@ -57,7 +57,7 @@ async function loadPlan(directory: string, task: WorkTask, signal: AbortSignal):
     }
     return plan;
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const plan = await createMediaPlan(task.url, signal);
+  const plan = await createMediaPlan(task.url, signal, task.mediaContext);
   await atomicJson(file, plan);
   return plan;
 }
@@ -92,7 +92,7 @@ export async function processTask(id: string, signal: AbortSignal): Promise<void
   let bytes = 0;
   for (let index = 0; index < plan.resources.length; index++) {
     await requireActive();
-    bytes += await downloadResource(plan.resources[index], directory, signal, bytes);
+    bytes += await downloadResource(plan.resources[index], directory, signal, bytes, task.mediaContext);
     if (bytes > maxJobBytes()) throw new Error('该视频超过单个任务的空间限制');
     await mutateTask(id, (entry) => { entry.finished = index + 1; entry.bytes = bytes; });
   }

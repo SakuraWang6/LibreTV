@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/client-api';
+import { api, videoDetailQueryKey } from '@/lib/client-api';
 // 播放器（artplayer + hls.js）按需加载：拆出独立 chunk，不占首屏 First Load JS
 const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) => m.PlayerShell), {
   ssr: false,
@@ -18,13 +18,14 @@ const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) =
 import { EmptyState, LoadingState, Spinner } from '@/components/states';
 import { PlaybackSourcePicker } from '@/components/switch-source';
 import { useLibraryPlaybackProgress } from '@/components/use-library-playback-progress';
-import { buildPlaybackSwitchUrl, canLinkLibraryProgress, episodeFromLabel, isPlayableEpisode, matchPlaybackEpisode, playbackKind, requestedResumePosition, titleSeason, type PlaybackIdentity, type PlaybackSelection } from '@/lib/playback-source';
+import { buildPlaybackSwitchUrl, canLinkLibraryProgress, episodeFromLabel, isMultipartMovie, isPlayableEpisode, matchPlaybackEpisode, playbackKind, requestedResumePosition, titleSeason, type PlaybackIdentity, type PlaybackSelection } from '@/lib/playback-source';
 import type { LibraryResponse } from '@/lib/local-library/types';
 import { SkipMarkPanel } from '@/components/skip-mark-panel';
 import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks';
 import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
 import { enqueueDownload } from '@/components/download-manager';
+import { buildMediaProxyUrl } from '@/lib/media-context';
 import { Icon } from '@/components/icon';
 import { useAuth } from '@/components/auth';
 import { resolveSource, useAppStore } from '@/lib/store';
@@ -38,6 +39,7 @@ import {
   db,
 } from '@/lib/db';
 import { cn } from '@/lib/utils';
+import { movieDownloadMetadata } from './download-metadata';
 
 /**
  * 播放页（唯一入口，替代旧版 watch.html → player.html 跳转链）。
@@ -65,7 +67,7 @@ function WatchContent() {
   const vodId = searchParams.get('id') || '';
   const directUrl = searchParams.get('url') || '';
   const titleParam = searchParams.get('title') || '';
-  const indexParam = parseInt(searchParams.get('index') || '0', 10) || 0;
+  const indexParam = Math.max(0, parseInt(searchParams.get('index') || '0', 10) || 0);
 
   const [reversed, setReversed] = useState(false);
   const [skipPanelOpen, setSkipPanelOpen] = useState(false);
@@ -111,13 +113,17 @@ function WatchContent() {
   });
   const sourceKind = searchParams.get('sourceKind');
   const source = resolvedSource && sourceKind === 'libvio' ? { ...resolvedSource, kind: 'libvio' as const } : resolvedSource;
+  const detailQueryKey = videoDetailQueryKey(source, vodId, indexParam);
 
   // 详情查询：无 id（纯直连链接分享）时跳过
   const detailQuery = useQuery({
-    queryKey: ['detail', sourceKey, vodId, source?.url, source?.kind],
-    queryFn: ({ signal }) => api.detail(vodId, source!, signal),
+    queryKey: detailQueryKey,
+    queryFn: ({ signal }) => api.detail(vodId, source!, signal, source?.kind === 'libvio' ? { index: indexParam } : undefined),
     enabled: Boolean(source && vodId && verified),
-    staleTime: 5 * 60_000,
+    staleTime: (query) => source?.kind === 'libvio' && !isPlayableEpisode(query.state.data?.episodes[indexParam] || '', query.state.data) ? 0 : 5 * 60_000,
+    retry: source?.kind === 'libvio' ? false : 1,
+    refetchOnReconnect: source?.kind === 'libvio' ? false : undefined,
+    placeholderData: (previous, query) => source?.kind === 'libvio' && detailQueryKey.slice(0, 5).every((value, index) => value === query?.queryKey[index]) ? previous : undefined,
   });
 
   const episodes = useMemo(() => detailQuery.data?.episodes ?? [], [detailQuery.data]);
@@ -127,18 +133,21 @@ function WatchContent() {
 
   // 当前播放地址：优先取剧集列表中的当前集，其次直连 URL 参数
   const currentUrl = useMemo(() => {
+    if (source?.kind === 'libvio' && vodId && !detailQuery.data) return '';
     if (episodes.length > 0) {
       const idx = Math.min(Math.max(indexParam, 0), episodes.length - 1);
-      const value = episodes[idx] || directUrl;
+      const value = episodes[idx] || (source?.kind === 'libvio' ? '' : directUrl);
       return isPlayableEpisode(value, detailQuery.data) ? value : '';
     }
-    return isPlayableEpisode(directUrl, detailQuery.data) ? directUrl : '';
-  }, [episodes, indexParam, directUrl, detailQuery.data]);
+    return (!vodId || source?.kind !== 'libvio') && isPlayableEpisode(directUrl, detailQuery.data) ? directUrl : '';
+  }, [episodes, indexParam, directUrl, detailQuery.data, source?.kind, vodId]);
 
   const currentIndex = useMemo(() => {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
     return indexParam;
   }, [episodes, indexParam]);
+  const nextEpisodeUrl = episodes[currentIndex + 1];
+  const canPrefetchNext = isPlayableEpisode(nextEpisodeUrl || '', detailQuery.data);
 
   const identity: PlaybackIdentity = {
     title: videoTitle,
@@ -146,6 +155,7 @@ function WatchContent() {
     year: videoInfo?.year,
     seasonNumber: detailQuery.data?.episodeSeasons?.[currentIndex] ?? titleSeason(videoTitle).season ?? 1,
     episodeNumber: episodeFromLabel(detailQuery.data?.episodeLabels?.[currentIndex]) ?? currentIndex + 1,
+    multipartMovie: isMultipartMovie(detailQuery.data),
   };
   const libraryId = searchParams.get('libraryId') || '';
   const libraryQuery = useQuery({
@@ -182,14 +192,15 @@ function WatchContent() {
     (index: number) => {
       const sp = new URLSearchParams(searchParams.toString());
       sp.set('index', String(index));
-      sp.set('url', episodes[index] || directUrl);
+      if (episodes[index]) sp.set('url', episodes[index]);
+      else sp.delete('url');
       sp.delete('position');
       // A library record belongs to one precise episode; a different episode
       // must never inherit that record merely because the online show matches.
       sp.delete('libraryId');
       router.replace(`/watch?${sp.toString()}`, { scroll: false });
     },
-    [router, searchParams, episodes, directUrl]
+    [router, searchParams, episodes]
   );
 
   // 进度恢复优先级：URL position 参数 > IndexedDB 记录
@@ -246,7 +257,7 @@ function WatchContent() {
     const position = playerApiRef.current?.getCurrentTime() ?? latestClock.current.position;
     const duration = playerApiRef.current?.getDuration() ?? latestClock.current.duration;
     handleProgress(position, duration);
-    queryClient.setQueryData(['detail', selection.source.key, selection.result.vodId, selection.source.url, selection.source.kind], selection.detail);
+    queryClient.setQueryData(videoDetailQueryKey(selection.source, selection.result.vodId, match.index), selection.detail);
     router.replace(buildPlaybackSwitchUrl({ ...selection, index: match.index }, position, linkedLibraryId), { scroll: false });
   };
 
@@ -348,15 +359,20 @@ function WatchContent() {
               disabled={!currentUrl}
               onClick={() => {
                 if (!currentUrl) return;
+                const downloadMetadata = movieDownloadMetadata({
+                  title: videoInfo?.title || videoTitle, year: videoInfo?.year,
+                  kind: isSeries ? 'tv' : 'movie', episodeCount: episodes.length,
+                  episodeLabels: detailQuery.data?.episodeLabels, index: currentIndex,
+                });
                 enqueueDownload({
                   url: currentUrl,
-                  // 多集才带集数后缀；单集影片（含电影）文件名就是纯标题
-                  title: `${videoTitle}${isSeries ? ` ${detailQuery.data?.episodeLabels?.[currentIndex] || `第${identity.episodeNumber}集`}` : ''}`,
+                  mediaContext: detailQuery.data?.mediaContext,
+                  title: `${downloadMetadata.title}${isSeries ? ` ${detailQuery.data?.episodeLabels?.[currentIndex] || `第${identity.episodeNumber}集`}` : ''}`,
                   format: 'MP4',
                   libraryMetadata: {
-                    title: videoInfo?.title || videoTitle,
+                    title: downloadMetadata.title,
                     kind: isSeries ? 'tv' : 'movie',
-                    year: videoInfo?.year,
+                    year: downloadMetadata.year,
                     description: videoInfo?.desc,
                     coverUrl: videoInfo?.cover,
                     sourceName: videoInfo?.sourceName || source.name,
@@ -381,7 +397,7 @@ function WatchContent() {
               {currentUrl ? (
                 <PlayerShell
                   key={playbackKey}
-                  url={currentUrl}
+                  url={buildMediaProxyUrl(currentUrl, detailQuery.data?.mediaContext)}
                   title={videoTitle}
                   adFilter={store.adFilter}
                   autoplayNext={store.autoplayNext}
@@ -392,8 +408,8 @@ function WatchContent() {
                   onPlayerApi={(api) => { playerApiRef.current = api; }}
                   onRecordSegment={handleRecordSegment}
                   episodeKey={`${sourceKey}:${vodId}:${currentIndex}`}
-                  nextUrl={currentIndex + 1 < episodes.length ? episodes[currentIndex + 1] : undefined}
-                  nextEpisodeKey={currentIndex + 1 < episodes.length ? `${sourceKey}:${vodId}:${currentIndex + 1}` : undefined}
+                  nextUrl={canPrefetchNext ? buildMediaProxyUrl(nextEpisodeUrl, detailQuery.data?.mediaContext) : undefined}
+                  nextEpisodeKey={canPrefetchNext ? `${sourceKey}:${vodId}:${currentIndex + 1}` : undefined}
                   getRestorePosition={getRestorePosition}
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
@@ -413,11 +429,12 @@ function WatchContent() {
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  {detailQuery.isLoading ? (
+                  {detailQuery.isLoading || (detailQuery.isPlaceholderData && detailQuery.isFetching) ? (
                     <Spinner size="lg" />
                   ) : (
                     <div className="text-center px-6 max-w-md">
                       <p className="text-faint text-sm">{detailQuery.data?.message || (detailQuery.isError ? '视频加载失败，可以在右侧选择其他播放源' : '此条目没有可直接播放的视频')}</p>
+                      {source && vodId && <button type="button" className="btn-ghost btn-sm mt-3" disabled={detailQuery.isFetching} onClick={() => { void detailQuery.refetch(); }}>{detailQuery.isFetching ? '重试中…' : '重试'}</button>}
                       {detailQuery.data?.externalLinks?.filter((link) => /^https?:\/\//i.test(link.url)).map((link) => <a key={link.url} className="btn-ghost btn-sm mt-3 inline-flex" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>)}
                       {detailQuery.data?.pageUrl && /^https?:\/\//i.test(detailQuery.data.pageUrl) && <a className="btn-ghost btn-sm mt-3 inline-flex" href={detailQuery.data.pageUrl} target="_blank" rel="noopener noreferrer">在原网站打开</a>}
                     </div>
@@ -538,7 +555,7 @@ function WatchContent() {
               </div>
             )}
             <div ref={sourcePanel}>
-              <PlaybackSourcePicker identity={identity} currentSourceKey={sourceKey} currentVodId={vodId} onSwitch={switchSource} autoLoad={Boolean(detailQuery.data) || detailQuery.isError} />
+              <PlaybackSourcePicker identity={identity} currentSourceKey={sourceKey} currentVodId={vodId} currentDetail={detailQuery.data} onSwitch={switchSource} autoLoad={Boolean(detailQuery.data) || detailQuery.isError} />
             </div>
             <p className="hidden md:block text-[10px] text-faint mt-3 leading-relaxed">
               快捷键：空格 播放/暂停 · ←/→ 快退/快进 5s · ↑/↓ 音量 · F 全屏 · Alt+←/→ 切换集数

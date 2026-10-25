@@ -1,6 +1,8 @@
 import { isProxiedUri, PROXY_BASE } from './m3u8';
 import { parseM3u8Playlist, type ParsedPlaylist } from './m3u8-parse';
 import { StreamingTransmuxer } from './mp4-transmuxer';
+import { buildMediaProxyUrl, type MediaContext } from './media-context';
+import { isNativeMediaUrl } from './playback-source';
 
 /**
  * 整集离线下载：
@@ -183,6 +185,7 @@ export interface DownloadJobOptions {
    * 直连失败时的兜底。默认关闭（服务器带宽成本由部署者承担）。
    */
   proxy?: boolean;
+  mediaContext?: MediaContext;
 }
 
 /** 无 Cache Storage 的降级：串行下载并立即写出，不落缓存（无断点、并发 1） */
@@ -246,6 +249,8 @@ function isMixedContentBlocked(target: string): boolean {
  */
 export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
   const { taskId, url, format, signal, pause, onProgress, target } = opts;
+  // This browser path parses HLS text; never read a whole MP4 into res.text().
+  if (isNativeMediaUrl(url)) throw new Error('此视频请使用后台下载保存');
   const concurrency = Math.min(Math.max(opts.concurrency ?? 8, 1), 16);
 
   // 内部硬停控制器：任一 worker 判失败就掐掉其余 worker。否则 Promise.all 已经
@@ -268,7 +273,8 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
   // 代理模式：m3u8 经 /api/proxy 拉取，代理会把内容里的分片/key 一并重写为代理
   // 地址，因此后续分片请求自动同源——这是直连被 CORS / 混合内容拦下时的兜底
   // （与播放器一致：player-shell 遇致命直连错误也会改走代理）。
-  const playlistUrl = opts.proxy && !isProxiedUri(url) ? `${PROXY_BASE}${encodeURIComponent(url)}` : url;
+  const playlistUrl = opts.mediaContext ? buildMediaProxyUrl(url, opts.mediaContext)
+    : opts.proxy && !isProxiedUri(url) ? `${PROXY_BASE}${encodeURIComponent(url)}` : url;
   let parsed: ParsedPlaylist;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {

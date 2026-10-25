@@ -1,4 +1,4 @@
-import { isExactTitleMatch } from './cms-parser';
+import { isExactTitleMatch, isNumberedCollectionTitle } from './cms-parser';
 import type { SearchResultItem, SourceConfig, VideoDetail } from './types';
 import type { LibraryEntry } from './local-library/types';
 import { buildWatchUrl } from './utils';
@@ -10,6 +10,7 @@ export interface PlaybackIdentity {
   year?: string;
   seasonNumber?: number;
   episodeNumber?: number;
+  multipartMovie?: boolean;
 }
 
 export interface PlaybackSelection {
@@ -56,6 +57,18 @@ export function playbackKind(typeName?: string, episodeCount = 0): 'movie' | 'tv
   return episodeCount > 1 ? 'tv' : undefined;
 }
 
+/** Multiple film parts cannot be continued safely through an ordinal index. */
+export function isMultipartMovie(detail?: VideoDetail): boolean {
+  if (!detail) return false;
+  if (isNumberedCollectionTitle(detail.videoInfo.title || '')) return true;
+  if (playbackKind(detail.videoInfo.typeName) !== 'movie' || detail.episodes.length < 2) return false;
+  const labels = detail.episodeLabels?.map((label) => label.replace(/<[^>]*>/g, ' ').normalize('NFKC').trim());
+  if (!labels || labels.length !== detail.episodes.length || labels.some((label) => !label)) return true;
+  const qualityLabel = /^(?:(?:正片|电影|播放|蓝光原盘|蓝光|高清|超清|原盘|修复版|重制版|国语|粤语|英语|中字|中英双字|无字幕|简|繁|HD|BD|UHD|[248]K|(?:720|1080|2160)[PI]|HDR(?:10)?\+?|DV|WEB[ .-]?DL)|[\s[\]()【】_.|/+-])+$/i;
+  const parts = labels.filter((label) => !qualityLabel.test(label));
+  return parts.length > 0;
+}
+
 export function isPlayableEpisode(url: string, detail?: VideoDetail): boolean {
   if (detail?.playbackType && detail.playbackType !== 'media') return false;
   try {
@@ -66,7 +79,21 @@ export function isPlayableEpisode(url: string, detail?: VideoDetail): boolean {
 }
 
 export function isNativeMediaUrl(url: string): boolean {
-  try { return /\.(?:mp4|m4v|webm|mov|mkv|ts)$/i.test(new URL(url, 'http://localhost').pathname); }
+  try {
+    const origin = typeof location === 'undefined' ? 'http://localhost' : location.origin;
+    let parsed = new URL(url, origin);
+    if (parsed.origin === origin) {
+      let target: string | undefined;
+      if (parsed.pathname === '/api/proxy' && parsed.searchParams.getAll('url').length === 1) target = parsed.searchParams.get('url') || undefined;
+      else if (parsed.pathname.startsWith('/api/proxy/')) target = decodeURIComponent(parsed.pathname.slice('/api/proxy/'.length));
+      if (target !== undefined) {
+        if (!/^https?:\/\//i.test(target)) return false;
+        parsed = new URL(target);
+      }
+    }
+    // Unwrap exactly once. Arbitrary external parser queries remain HTML/HLS paths.
+    return ['http:', 'https:'].includes(parsed.protocol) && /\.(?:mp4|m4v|webm|mov|mkv|ts)$/i.test(parsed.pathname);
+  }
   catch { return false; }
 }
 
@@ -100,6 +127,9 @@ export function matchPlaybackEpisode(current: PlaybackIdentity, result: Pick<Sea
   const reason = identityMismatch(current, { title, kind, typeName: detail.videoInfo.typeName || result.typeName, year: detail.videoInfo.year || result.year, seasonNumber: season });
   if (reason) return { reason };
   if (detail.playbackType && detail.playbackType !== 'media') return { reason: detail.message || '此来源不能在播放器中直接播放' };
+  if (current.multipartMovie || isNumberedCollectionTitle(current.title) || isMultipartMovie(detail)) {
+    return { reason: '电影合集或分段版本需手动选择分部' };
+  }
   if (current.kind !== 'tv' && kind !== 'tv') {
     if ((current.episodeNumber ?? 1) > 1) return { reason: '分段版本不同，不能准确续接' };
     return isPlayableEpisode(detail.episodes[0] || '', detail) ? { index: 0 } : { reason: '没有可直接播放的视频' };
@@ -121,6 +151,7 @@ export function matchPlaybackEpisode(current: PlaybackIdentity, result: Pick<Sea
 /** Re-check disk metadata before linking online playback to an existing file. */
 export function canLinkLibraryProgress(entry: LibraryEntry, current: PlaybackIdentity, detail: VideoDetail): boolean {
   if (!detail.episodes.length) return false;
+  if (current.multipartMovie || isNumberedCollectionTitle(entry.title) || isMultipartMovie(detail)) return false;
   const typeName = detail.videoInfo.typeName;
   const kind = playbackKind(typeName, detail.episodes.length);
   const confirmed: PlaybackIdentity = { ...current, title: detail.videoInfo.title || current.title, kind, typeName, year: detail.videoInfo.year };

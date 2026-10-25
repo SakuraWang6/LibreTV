@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Drawer } from './drawer';
+import { LibvioBrowserConnection } from './libvio-browser-connection';
 import { ConfirmDialog } from './confirm-dialog';
 import { Dropdown, type DropdownOption } from './dropdown';
 import { Icon, type IconName } from './icon';
@@ -293,6 +294,8 @@ function VodSourcesPanel() {
           </button>
         }
       />
+
+      <LibvioBrowserConnection />
 
       <SourceForm
         visible={editing === '__new__'}

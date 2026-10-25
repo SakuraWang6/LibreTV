@@ -1,9 +1,11 @@
 import type { LibraryMetadata } from '@/lib/local-library/types';
+import type { MediaContext } from '@/lib/media-context';
 
 export type BackgroundDownloadStatus = 'queued' | 'downloading' | 'processing' | 'completed' | 'failed' | 'cancelled';
 export interface BackgroundDownloadTask {
   id: string;
   url: string;
+  mediaContext?: MediaContext;
   title: string;
   format: 'MP4';
   metadata: LibraryMetadata;

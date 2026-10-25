@@ -4,7 +4,7 @@ import { cmsRequestHeaders, parseDetail, parseDetailPageHtml } from '@/lib/cms-p
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import { isLibvioSource } from '@/lib/providers/libvio/source';
-import { getLibvioDetail } from '@/lib/providers/libvio/server';
+import { getLibvioDetail, type LibvioDetailSelection } from '@/lib/providers/libvio/server';
 import type { SourceConfig, VideoDetail } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -43,8 +43,27 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: '无效的点播源配置' }, { status: 400 });
   }
 
+  const selection: LibvioDetailSelection = {};
+  for (const field of ['index', 'episodeNumber', 'seasonNumber'] as const) {
+    const raw = url.searchParams.get(field);
+    if (raw === null) continue;
+    const value = Number(raw);
+    const minimum = field === 'index' ? 0 : 1;
+    const maximum = field === 'index' ? 99 : 9999;
+    if (url.searchParams.getAll(field).length !== 1 || !/^\d{1,4}$/.test(raw) || !Number.isInteger(value) || value < minimum || value > maximum) {
+      return NextResponse.json({ error: `无效的剧集选择参数：${field}` }, { status: 400 });
+    }
+    selection[field] = value;
+  }
+  if (selection.seasonNumber !== undefined && selection.episodeNumber === undefined) {
+    return NextResponse.json({ error: '季数选择必须同时指定明确集数' }, { status: 400 });
+  }
+
   try {
-    if (isLibvioSource(source)) return NextResponse.json(await getLibvioDetail(source, id, req.signal));
+    if (isLibvioSource(source)) {
+      if (!/^\d{1,18}$/.test(id)) return NextResponse.json({ error: '无效的 LIBVIO 作品编号' }, { status: 400 });
+      return NextResponse.json(await getLibvioDetail(source, id, req.signal, selection));
+    }
     // 详情页根地址：显式 detail 优先，其次 baseUrl 参数，最后用接口地址的 origin 推导
     // （Apple CMS 的详情页通常与接口同域）。脏 URL 会让 new URL 抛错，由外层 catch 兜底
     const detailRoot = (source.detail || baseUrl || new URL(source.url).origin).replace(/\/+$/, '');

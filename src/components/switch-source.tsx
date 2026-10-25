@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/client-api';
 import { resolveSource, useAppStore } from '@/lib/store';
 import { isQualityEntryFresh, qualityKey } from '@/lib/quality';
@@ -14,10 +14,11 @@ import { useQualityProbe } from './use-quality-probe';
 interface Candidate { source: SourceConfig; result: SearchResultItem; detail?: VideoDetail; ms?: number; error?: string }
 
 /** Source discovery leaves the active player intact until an exact episode is selected. */
-export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentVodId = '', onSwitch, autoLoad = false }: {
+export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentVodId = '', currentDetail, onSwitch, autoLoad = false }: {
   identity: PlaybackIdentity;
   currentSourceKey?: string;
   currentVodId?: string;
+  currentDetail?: VideoDetail;
   onSwitch: (selection: PlaybackSelection) => void;
   autoLoad?: boolean;
 }) {
@@ -28,9 +29,11 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
   const qualityMap = useAppStore((state) => state.qualityMap);
   const [enabled, setEnabled] = useState(autoLoad);
   const [revision, setRevision] = useState(0);
+  const [discovered, setDiscovered] = useState<Candidate[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [phase, setPhase] = useState<'idle' | 'searching' | 'testing' | 'done'>('idle');
   const [error, setError] = useState('');
+  const fullDetails = useRef(new Map<Candidate, { detail: VideoDetail; ms: number }>());
   const sources = useMemo(() => {
     const seen = new Set<string>();
     return selectedKeys.map((key) => resolveSource({ envSources, customAPIs }, key)).filter((source): source is SourceConfig => {
@@ -51,13 +54,17 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
     return cached;
   }, [candidates, qualityMap]);
   useEffect(() => { prime(candidates.map((candidate) => candidate.result)); }, [candidates, prime]);
-  // The episode changes the target mapping, not the film's discovery request.
+  // Changing episodes re-resolves LIBVIO's selected slot without searching again.
   const identityKey = JSON.stringify({ title: identity.title, kind: identity.kind, typeName: identity.typeName, year: identity.year, seasonNumber: identity.seasonNumber });
+  const selectionKey = discovered.some((candidate) => candidate.source.kind === 'libvio')
+    ? JSON.stringify({ episodeNumber: identity.episodeNumber ?? 1, seasonNumber: identity.seasonNumber ?? titleSeason(identity.title).season ?? 1 }) : '';
   useEffect(() => { if (autoLoad) setEnabled(true); }, [autoLoad]);
 
   useEffect(() => {
     if (!enabled || !queryTitle || !sources.length) return;
     const controller = new AbortController();
+    fullDetails.current.clear();
+    setDiscovered([]);
     setCandidates([]);
     setError('');
     setPhase('searching');
@@ -72,20 +79,8 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
             && !identityMismatch(requestedIdentity, { title: result.name, year: result.year, kind: playbackKind(result.typeName), typeName: result.typeName }));
           for (const result of results.slice(0, 2)) matches.push({ source, result });
         }
-        setCandidates(matches);
-        setPhase('testing');
-        await Promise.all(matches.map(async (candidate) => {
-          const started = performance.now();
-          try {
-            const detail = await api.detail(candidate.result.vodId, candidate.source, controller.signal);
-            if (!controller.signal.aborted) setCandidates((previous) => previous.map((item) => item.source.key === candidate.source.key && item.result.vodId === candidate.result.vodId
-              ? { ...item, detail, ms: Math.round(performance.now() - started) } : item));
-          } catch (failure) {
-            if (!controller.signal.aborted) setCandidates((previous) => previous.map((item) => item.source.key === candidate.source.key && item.result.vodId === candidate.result.vodId
-              ? { ...item, error: failure instanceof Error ? failure.message : '暂时无法连接' } : item));
-          }
-        }));
-        if (!controller.signal.aborted) setPhase('done');
+        setDiscovered(matches);
+        if (!matches.length) setPhase('done');
       } catch (failure) {
         if (!controller.signal.aborted) { setError(failure instanceof Error ? failure.message : '查找播放源失败'); setPhase('done'); }
       }
@@ -93,7 +88,34 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
     return () => controller.abort();
   }, [enabled, queryTitle, identityKey, sources, yellowFilter, revision]);
 
-  const sorted = [...candidates].sort((a, b) => {
+  useEffect(() => {
+    if (!enabled || !discovered.length) return;
+    const controller = new AbortController();
+    const selection = selectionKey ? JSON.parse(selectionKey) as { episodeNumber: number; seasonNumber: number } : undefined;
+    setCandidates(discovered);
+    setPhase('testing');
+    void Promise.all(discovered.map(async (candidate) => {
+      if (candidate.source.key === currentSourceKey && candidate.result.vodId === currentVodId) return;
+      const started = performance.now();
+      try {
+        const cached = candidate.source.kind !== 'libvio' ? fullDetails.current.get(candidate) : undefined;
+        const detail = cached?.detail ?? await api.detail(candidate.result.vodId, candidate.source, controller.signal, candidate.source.kind === 'libvio' ? selection : undefined);
+        const ms = cached?.ms ?? Math.round(performance.now() - started);
+        if (!controller.signal.aborted) {
+          if (candidate.source.kind !== 'libvio') fullDetails.current.set(candidate, { detail, ms });
+          setCandidates((previous) => previous.map((item) => item.source.key === candidate.source.key && item.result.vodId === candidate.result.vodId
+            ? { ...item, detail, ms } : item));
+        }
+      } catch (failure) {
+        if (!controller.signal.aborted) setCandidates((previous) => previous.map((item) => item.source.key === candidate.source.key && item.result.vodId === candidate.result.vodId
+          ? { ...item, error: failure instanceof Error ? failure.message : '暂时无法连接' } : item));
+      }
+    })).then(() => { if (!controller.signal.aborted) setPhase('done'); });
+    return () => controller.abort();
+  }, [enabled, discovered, selectionKey, currentSourceKey, currentVodId]);
+
+  const sorted = candidates.map((candidate) => currentDetail && candidate.source.key === currentSourceKey && candidate.result.vodId === currentVodId
+    ? { ...candidate, detail: currentDetail } : candidate).sort((a, b) => {
     const currentA = a.source.key === currentSourceKey && a.result.vodId === currentVodId;
     const currentB = b.source.key === currentSourceKey && b.result.vodId === currentVodId;
     if (currentA !== currentB) return currentA ? -1 : 1;
@@ -104,7 +126,7 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
     <div className="flex items-center justify-between gap-2 mb-2">
       <h2 className="text-sm font-semibold text-content">播放源</h2>
       <div className="flex gap-1">
-        {candidates.some((candidate) => candidate.detail) && <button type="button" className="btn-ghost btn-sm" onClick={() => probe(candidates.filter((candidate) => candidate.detail && matchPlaybackEpisode(identity, candidate.result, candidate.detail).index !== undefined).map((candidate) => candidate.result))}>画质</button>}
+        {sorted.some((candidate) => candidate.detail) && <button type="button" className="btn-ghost btn-sm" onClick={() => probe(sorted.filter((candidate) => candidate.detail && matchPlaybackEpisode(identity, candidate.result, candidate.detail).index !== undefined).map((candidate) => candidate.result))}>画质</button>}
         <button type="button" className="btn-ghost btn-sm" disabled={phase === 'searching' || phase === 'testing'} onClick={() => { setEnabled(true); setRevision((value) => value + 1); }}>{enabled ? '重新查找' : '联网查找'}</button>
       </div>
     </div>

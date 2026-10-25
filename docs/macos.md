@@ -70,6 +70,20 @@ DEFAULT_SOURCES='[{"name":"自己的片源","url":"https://example.com/api.php/p
 
 更新代码前先停止，更新后运行 `npm ci`、`npm run build`，再启动。密码和私人片源不写入启动项的 plist。
 
+## 可选：LIBVIO 专用 Chrome
+
+LIBVIO 网页适配可以使用已安装的 Google Chrome 读取公开搜索、详情和播放页。先安装独立依赖：
+
+```sh
+npm ci --prefix scripts/libvio-browser --ignore-scripts --no-audit --no-fund
+```
+
+在 `.env.macos.local` 添加 `LIBVIO_BROWSER_SOCKET='/仓库绝对路径/.local/libvio-browser.sock'`，并在 `DEFAULT_SOURCES` 数组增加 `{"name":"LIBVIO","url":"https://libvio.host","kind":"libvio"}`。重启后会打开专用 Chrome；使用本机免登录模式时，「设置 → 点播源」中也可重新打开它。更新独立依赖时重复上面的安装命令。
+
+专用资料保存在 `.local/libvio-browser-profile/`，与日常 Chrome 和 LibreTV 窗口的资料分开。网站的普通验证在这个窗口完成；适配器不解人机题、不伪装浏览器指纹，也不导出 Cookie。浏览器连接只使用本机私有 Unix socket，公网部署和 Linux 不提供浏览器控制。
+
+搜索和读取新播放地址时需保持专用 Chrome 打开。已提交的后台下载由独立进程处理，关闭 Chrome 不会停止任务。已解析的直媒体会携带固定的公开网页 Referer；网盘分享和暂不支持的加密播放器保留原站入口。并非原站每条线路都能解析。细节见 [浏览器桥说明](../scripts/libvio-browser/README.md)。
+
 ## 本地影视库
 
 Mac 启动脚本默认启用磁盘影视库，入口为 **http://127.0.0.1:8899/library**。在线播放页点击「下载本集」，任务提交成功后就由后台服务处理，可以关闭窗口。下次打开「下载管理」会读取已有任务，支持取消、失败重试及完成后直接播放；移除下载记录会保留已经入库的视频。

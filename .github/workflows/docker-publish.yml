@@ -52,6 +52,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: node --test scripts/libvio-browser/readiness.test.cjs
 
   build:
     needs: verify

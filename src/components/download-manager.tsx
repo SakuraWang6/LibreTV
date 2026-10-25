@@ -19,6 +19,7 @@ import { changeBackgroundDownload, createBackgroundDownload, fetchBackgroundDown
 import type { BackgroundDownloadStatus, BackgroundDownloadTask } from '@/lib/background-downloads/types';
 import Link from 'next/link';
 import { Switch } from './settings-shared';
+import type { MediaContext } from '@/lib/media-context';
 
 /**
  * 全局下载管理器（UI 采用本站 Drawer 模式）：
@@ -39,6 +40,7 @@ export interface AddDownloadPayload {
   title: string;
   format?: 'TS' | 'MP4';
   libraryMetadata?: LibraryMetadata;
+  mediaContext?: MediaContext;
 }
 
 /** 运行中的任务句柄（不进持久化） */
@@ -167,6 +169,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         signal: handle.abort.signal,
         pause: handle.pause,
         proxy,
+        mediaContext: entry.mediaContext,
         onProgress,
         target,
       });
@@ -233,7 +236,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           // Query at the click as well: a mount-time 401 before login must never disable the library permanently.
           const useLibrary = await checkLibrary();
           if (useLibrary) {
-            await createBackgroundDownload(detail.url, detail.libraryMetadata ?? guessLibraryMetadata(detail.title));
+            await createBackgroundDownload(detail.url, detail.libraryMetadata ?? guessLibraryMetadata(detail.title), undefined, detail.mediaContext);
             await refreshBackground();
             toast(`《${detail.title}》已加入下载队列`, 'success');
             return;
@@ -241,7 +244,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           target = await pickSaveTarget(`${detail.title}.${format.toLowerCase()}`);
           targets.current.set(id, target);
           const entry: DownloadTaskEntry = {
-            id, url: detail.url, title: detail.title, format,
+            id, url: detail.url, mediaContext: detail.mediaContext, title: detail.title, format,
             libraryMetadata: detail.libraryMetadata ?? guessLibraryMetadata(detail.title),
             saveDestination: 'file',
             status: 'waiting', finished: 0, total: 0, errorNum: 0,
@@ -294,7 +297,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         || (entry.saveDestination === undefined && await checkLibrary());
       if (useLibrary) {
         // Transfer legacy browser work only after the durable server creation has been acknowledged.
-        await createBackgroundDownload(entry.url, entry.libraryMetadata ?? guessLibraryMetadata(entry.title), `browser:${entry.id}`);
+        await createBackgroundDownload(entry.url, entry.libraryMetadata ?? guessLibraryMetadata(entry.title), `browser:${entry.id}`, entry.mediaContext);
         await clearDownloadChunks(entry.id);
         await db.downloads.delete(entry.id);
         refresh();

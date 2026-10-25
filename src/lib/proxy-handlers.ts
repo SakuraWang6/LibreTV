@@ -3,6 +3,7 @@ import { guardRequest, jsonError } from '@/lib/api-guard';
 import { checkLiveUrlAllowed, isBlockedByDNS, isValidProxyUrl } from '@/lib/ssrf';
 import { fetchWithSafeRedirects } from '@/lib/fetch-utils';
 import { rewriteM3u8, LIVE_STREAM_BASE } from '@/lib/m3u8';
+import { mediaContextHeaders, mediaProxyPrefix, parseMediaContext, type MediaContext } from '@/lib/media-context';
 
 /**
  * 代理目标地址的两种传入形式：
@@ -72,6 +73,12 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
   const guarded = guardRequest(req);
   if (guarded && !looksLikeImageUrl(targetUrl)) return guarded;
 
+  let mediaContext: MediaContext | undefined;
+  try { mediaContext = parseMediaContext(new URL(req.url).searchParams.get('mediaContext') ?? undefined); }
+  catch { return new NextResponse('不支持的媒体来源上下文', { status: 400 }); }
+  // A media context must not expand the anonymous image exception into a media proxy.
+  if (mediaContext && guarded) return guarded;
+
   if (!isValidProxyUrl(targetUrl)) {
     return new NextResponse('无效的 URL', { status: 400 });
   }
@@ -79,9 +86,11 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
     return new NextResponse('不允许访问私有/保留网络地址', { status: 403 });
   }
 
-  const headers: Record<string, string> = { 'User-Agent': UA, Accept: '*/*' };
+  const headers: Record<string, string> = mediaContext
+    ? { Accept: '*/*', ...mediaContextHeaders(mediaContext) }
+    : { 'User-Agent': UA, Accept: '*/*' };
   try {
-    if (isDoubanHost(new URL(targetUrl).hostname)) {
+    if (!mediaContext && isDoubanHost(new URL(targetUrl).hostname)) {
       headers.Referer = 'https://movie.douban.com/';
     }
   } catch { /* 忽略非法 URL */ }
@@ -96,8 +105,8 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
     try {
       const result = await fetchWithSafeRedirects(targetUrl, {
         headers,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+        signal: mediaContext ? req.signal : AbortSignal.timeout(TIMEOUT_MS),
+      }, mediaContext ? { headerTimeoutMs: HEADER_TIMEOUT_MS } : undefined);
       response = result.res;
       finalUrl = result.finalUrl;
       lastError = null;
@@ -121,7 +130,7 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
   // m3u8 文本：重写为代理地址（以重定向后的最终 URL 为 base 解析相对地址）
   if (isM3u8) {
     const text = await response.text();
-    return new NextResponse(rewriteM3u8(text, finalUrl), {
+    return new NextResponse(rewriteM3u8(text, finalUrl, 0, mediaProxyPrefix(mediaContext)), {
       status: response.status,
       headers: {
         'Content-Type': 'application/vnd.apple.mpegurl',

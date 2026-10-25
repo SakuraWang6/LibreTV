@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { LibraryError, validateLibraryMetadata } from '@/lib/local-library/server';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import { withFileLock } from '@/lib/local-library/file-lock';
+import { parseMediaContext } from '@/lib/media-context';
 import type { BackgroundDownloadTask, BackgroundDownloadsResponse } from './types';
 
 export interface StoredTask extends BackgroundDownloadTask { version: 1; idempotencyKey?: string; uploadId?: string; cancelRequested?: boolean }
@@ -51,6 +52,7 @@ export async function readTask(id: string): Promise<StoredTask> {
     if ((await handle.stat()).size > 128 * 1024) throw new LibraryError('下载记录过大', 409);
     const task = JSON.parse(await handle.readFile('utf8')) as StoredTask;
     if (task.version !== 1 || task.id !== id) throw new LibraryError('下载记录不可用', 409);
+    try { parseMediaContext(task.mediaContext); } catch { throw new LibraryError('下载记录的来源上下文不可用', 409); }
     return task;
   } finally { await handle.close(); }
 }
@@ -79,8 +81,8 @@ export async function mutateTask(id: string, change: (task: StoredTask) => Store
 }
 
 export function publicTask(task: StoredTask): BackgroundDownloadTask {
-  const { id, url, title, format, metadata, status, finished, total, bytes, error, libraryItemId, createdAt, updatedAt } = task;
-  return { id, url, title, format, metadata, status, finished, total, bytes, error, libraryItemId, createdAt, updatedAt };
+  const { id, url, mediaContext, title, format, metadata, status, finished, total, bytes, error, libraryItemId, createdAt, updatedAt } = task;
+  return { id, url, mediaContext, title, format, metadata, status, finished, total, bytes, error, libraryItemId, createdAt, updatedAt };
 }
 
 export async function listDownloads(): Promise<BackgroundDownloadsResponse> {
@@ -96,6 +98,9 @@ export async function listDownloads(): Promise<BackgroundDownloadsResponse> {
 export async function enqueueDownload(body: unknown): Promise<{ task: BackgroundDownloadTask }> {
   const data = body as Record<string, unknown> | null;
   if (!data || typeof data.url !== 'string' || data.url.length > 8192) throw new LibraryError('缺少有效的视频地址');
+  let mediaContext;
+  try { mediaContext = parseMediaContext(data.mediaContext); } catch { throw new LibraryError('不支持的媒体来源上下文'); }
+  if (data.headers !== undefined || data.cookie !== undefined || data.Cookie !== undefined) throw new LibraryError('下载任务不支持自定义请求头或 Cookie');
   let parsed: URL;
   try { parsed = new URL(data.url); } catch { throw new LibraryError('视频地址格式不正确'); }
   if (parsed.username || parsed.password) throw new LibraryError('视频地址不能包含登录凭据');
@@ -113,7 +118,7 @@ export async function enqueueDownload(body: unknown): Promise<{ task: Background
     if (match) return { task: publicTask(match) };
     if (existing.length >= 200) throw new LibraryError('下载记录已满，请先清理已完成的记录', 409);
     const task: StoredTask = {
-      version: 1, id: crypto.randomBytes(16).toString('hex'), url: parsed.href, title: metadata.title, metadata, format: 'MP4',
+      version: 1, id: crypto.randomBytes(16).toString('hex'), url: parsed.href, ...(mediaContext ? { mediaContext } : {}), title: metadata.title, metadata, format: 'MP4',
       status: 'queued', finished: 0, total: 0, bytes: 0, createdAt: Date.now(), updatedAt: Date.now(), ...(key ? { idempotencyKey: key } : {}),
     };
     await atomicJson(path.join(await downloadsRoot(), `${task.id}.json`), task);

@@ -10,6 +10,7 @@ import { POST as retryRoute } from '@/app/api/downloads/[id]/retry/route';
 import { DELETE } from '@/app/api/downloads/[id]/route';
 import { enqueueDownload, readTask, mutateTask, downloadsRoot } from './store';
 import { processTask } from './worker';
+import { createMediaPlan, downloadResource } from './media';
 
 vi.mock('@/lib/ssrf', () => ({ checkUpstreamAllowed: vi.fn(async (url: string) => ({ ok: url.startsWith('https://media.example/') })) }));
 vi.mock('./media', () => ({
@@ -34,6 +35,22 @@ beforeEach(async () => {
 afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 
 describe('durable background download queue', () => {
+  it('persists the public source context and restores it for an independent worker', async () => {
+    const body = { url: 'https://media.example/movie.mp4', metadata, mediaContext: 'libvio' };
+    const created = await POST(request('POST', body));
+    expect(created.status).toBe(200);
+    const { task } = await created.json();
+    expect(await readTask(task.id)).toMatchObject({ mediaContext: 'libvio', status: 'queued' });
+    const signal = new AbortController().signal;
+    await processTask(task.id, signal);
+    expect(createMediaPlan).toHaveBeenLastCalledWith(body.url, signal, 'libvio');
+    expect(downloadResource).toHaveBeenLastCalledWith(expect.any(Object), expect.any(String), signal, 0, 'libvio');
+    expect(await readTask(task.id)).toMatchObject({ mediaContext: 'libvio', status: 'completed' });
+    for (const data of [{ mediaContext: 'https://attacker.example' }, { mediaContext: { Cookie: 'secret' } }, { headers: { Cookie: 'secret' } }, { cookie: 'secret' }]) {
+      expect((await POST(request('POST', { ...body, ...data }))).status).toBe(400);
+    }
+  });
+
   it('authenticates every endpoint and rejects cross-origin writes and private sources', async () => {
     expect((await GET(new Request('http://localhost/api/downloads'))).status).toBe(401);
     expect((await POST(request('POST', {}, { origin: 'https://attacker.example' }))).status).toBe(403);

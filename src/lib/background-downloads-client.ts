@@ -2,6 +2,7 @@
 
 import type { LibraryMetadata } from './local-library/types';
 import type { BackgroundDownloadTask, BackgroundDownloadsResponse } from './background-downloads/types';
+import type { MediaContext } from './media-context';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -23,11 +24,11 @@ export async function fetchBackgroundDownloads(): Promise<BackgroundDownloadsRes
   return result;
 }
 
-export async function createBackgroundDownload(url: string, metadata: LibraryMetadata, idempotencyKey = crypto.randomUUID()): Promise<BackgroundDownloadTask> {
+export async function createBackgroundDownload(url: string, metadata: LibraryMetadata, idempotencyKey = crypto.randomUUID(), mediaContext?: MediaContext): Promise<BackgroundDownloadTask> {
   // Do not retry a creation silently: the same key can safely be reused when migrating an old browser task.
   const result = await request<{ task: BackgroundDownloadTask }>('/api/downloads', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, metadata, idempotencyKey }),
+    body: JSON.stringify({ url, metadata, idempotencyKey, mediaContext }),
   });
   if (!result.task?.id) throw new Error('后台下载未确认创建成功，请先打开下载管理检查任务');
   return result.task;

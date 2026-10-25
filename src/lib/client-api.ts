@@ -38,6 +38,18 @@ export interface LiveProbeResult {
 /** /api/status 的 React Query key：Providers 与 AuthProvider 共用，避免同一页面重复请求 */
 export const STATUS_QUERY_KEY = ['app-status'] as const;
 
+export interface DetailSelection {
+  index?: number;
+  episodeNumber?: number;
+  seasonNumber?: number;
+}
+
+/** LIBVIO resolves one selected slot; other providers return their full URLs. */
+export function videoDetailQueryKey(source: SourceConfig | undefined, id: string, index = 0) {
+  const key = ['detail', source?.key, id, source?.url, source?.kind];
+  return source?.kind === 'libvio' ? [...key, index] : key;
+}
+
 export function onUnauthorized(handler: (event: CustomEvent) => void): () => void {
   const wrapped = (e: Event) => handler(e as CustomEvent);
   window.addEventListener(UNAUTHORIZED_EVENT, wrapped);
@@ -141,8 +153,11 @@ export const api = {
     return searchStream(wd, sources, filterAdult, onSource, signal);
   },
 
-  detail: (id: string, source: SourceConfig, signal?: AbortSignal) => {
+  detail: (id: string, source: SourceConfig, signal?: AbortSignal, selection?: DetailSelection) => {
     const sp = new URLSearchParams({ id, source: JSON.stringify(source) });
+    for (const [key, value] of Object.entries(selection || {})) {
+      if (value !== undefined) sp.set(key, String(value));
+    }
     return request<VideoDetail>(`/api/detail?${sp.toString()}`, { signal });
   },
 
@@ -211,10 +226,10 @@ export const api = {
   },
 
   /** 换源：按标题跨源搜索并取详情，附带接口耗时（测速）；支持 signal 以便关闭弹窗时中止在途请求 */
-  detailSpeed: async (id: string, source: SourceConfig, signal?: AbortSignal) => {
+  detailSpeed: async (id: string, source: SourceConfig, signal?: AbortSignal, selection?: DetailSelection) => {
     const start = performance.now();
     try {
-      const detail = await api.detail(id, source, signal);
+      const detail = await api.detail(id, source, signal, selection);
       return { ok: true, ms: Math.round(performance.now() - start), detail };
     } catch (err) {
       return { ok: false, ms: Math.round(performance.now() - start), detail: undefined as VideoDetail | undefined, error: err instanceof Error ? err.message : '失败' };

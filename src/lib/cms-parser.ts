@@ -315,7 +315,21 @@ function exactSeason(title: string, query = false): { base: string; season: numb
   return parsed && (parsed.explicit || query) ? parsed : undefined;
 }
 
-/** Whole-title search with edition and explicit season aliases, never substring/OR matching. */
+function exactCollectionBase(title: string): string | undefined {
+  // A small numbered collection is explicit; four-digit release-year ranges
+  // and arbitrary prefix matches must not become title aliases.
+  const match = title.match(/^(.*?[^\d])\s*(\d{1,2})\s*(?:-|至)\s*(\d{1,2})$/);
+  if (!match) return undefined;
+  const first = Number(match[2]);
+  const last = Number(match[3]);
+  return first >= 1 && last <= 30 && last > first && last - first <= 10 ? match[1].trim() : undefined;
+}
+
+export function isNumberedCollectionTitle(title: string): boolean {
+  return exactCollectionBase(titleWithoutEdition(title)) !== undefined;
+}
+
+/** Whole-title identity with explicit presentation-edition and season aliases. */
 export function isExactTitleMatch(name: string, wd: string): boolean {
   const title = titleWithoutEdition(name);
   const query = titleWithoutEdition(wd);
@@ -331,8 +345,33 @@ export function isExactTitleMatch(name: string, wd: string): boolean {
   return false;
 }
 
+function searchTitleIdentity(value: string, query = false): { base: string; version?: string; season?: number } {
+  const title = titleWithoutEdition(value);
+  const season = exactSeason(title, query);
+  const base = (season?.base ?? title).trim();
+  const version = base.match(/\s*(?:\(\s*(美版|英版)\s*\)|\[\s*(美版|英版)\s*\]|【\s*(美版|英版)\s*】|(美版|英版))$/);
+  return {
+    base: version ? base.slice(0, version.index).trim() : base,
+    version: version?.slice(1).find(Boolean),
+    season: season?.season,
+  };
+}
+
+function isExactSearchTitleMatch(name: string, wd: string): boolean {
+  if (isExactTitleMatch(name, wd)) return true;
+  const collectionBase = exactCollectionBase(titleWithoutEdition(name));
+  if (collectionBase && normalizeTitle(collectionBase) === normalizeTitle(titleWithoutEdition(wd))) return true;
+  const title = searchTitleIdentity(name);
+  const query = searchTitleIdentity(wd, true);
+  // Regional remakes are discoverable by the base title, but remain distinct
+  // identities for playback switching through isExactTitleMatch above.
+  if ((!title.version && !query.version) || (query.version && title.version !== query.version)) return false;
+  const base = normalizeTitle(query.base);
+  return !!base && normalizeTitle(title.base) === base && (!query.season || title.season === query.season);
+}
+
 export function filterExactTitleResults<T extends { name?: string; typeName?: string }>(items: T[], wd: string): T[] {
   const requestedExtra = /解说|花絮|预告|特辑|幕后/.test(wd);
-  return items.filter((item) => isExactTitleMatch(item.name || '', wd)
+  return items.filter((item) => isExactSearchTitleMatch(item.name || '', wd)
     && (requestedExtra || !/解说|花絮|预告|特辑|幕后/.test(item.typeName || '')));
 }

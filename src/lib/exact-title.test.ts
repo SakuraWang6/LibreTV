@@ -12,6 +12,7 @@ describe('exact title search', () => {
     ['电影名 1080P', '电影名'],
     ['流浪地球2', '流浪地球2'],
     ['1917', '1917'],
+    ['教父1-3', '教父1-3'],
   ])('matches title/edition/season alias %s / %s', (name, query) => {
     expect(isExactTitleMatch(name, query)).toBe(true);
   });
@@ -27,6 +28,17 @@ describe('exact title search', () => {
     ['流浪地球2', '流浪地球'],
     ['流浪地球', '流浪地球2'],
     ['电影名2024', '电影名'],
+    ['教父外传1-3', '教父'],
+    ['教父解说1-3', '教父'],
+    ['教父1972-1990', '教父'],
+    ['教父1972至1990', '教父'],
+    ['教父1-99', '教父'],
+    ['教父3-1', '教父'],
+    ['教父1-3', '教父2'],
+    ['教父1-3', '教父'],
+    ['教父 1至3', '教父'],
+    ['教父1-3 1080P', '教父'],
+    ['教父', '教父1-3'],
     ['', '电影名'],
     ['电影名', ''],
   ])('rejects a different work %s / %s', (name, query) => {
@@ -40,6 +52,42 @@ describe('exact title search', () => {
       { name: '电影名', typeName: '剧情片', year: '2024' },
     ];
     expect(filterExactTitleResults(items, '电影名')).toEqual(items.slice(1));
+  });
+
+  it.each(['教父1-3', '教父 1至3', '教父1-3 1080P'])('discovers a short collection without treating it as one film: %s', (name) => {
+    expect(filterExactTitleResults([{ name }], '教父')).toEqual([{ name }]);
+    expect(isExactTitleMatch(name, '教父')).toBe(false);
+  });
+
+  it('discovers explicitly suffixed US and UK versions without changing their names', () => {
+    const seasons = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一'];
+    const us = seasons.map((season) => ({ name: `无耻之徒美版 第${season}季`, typeName: '欧美剧' }));
+    const uk = { name: '无耻之徒（英版） 第一季', typeName: '欧美剧' };
+    const original = { name: '无耻之徒 第一季', typeName: '欧美剧' };
+    const items = [...us, uk, original, { name: '无耻之徒美版外传 第一季' }];
+    expect(filterExactTitleResults(items, '无耻之徒')).toEqual([...us, uk, original]);
+    expect(filterExactTitleResults(items, '无耻之徒美版')).toEqual(us);
+    expect(filterExactTitleResults(items, '无耻之徒【美版】 第2季')).toEqual([us[1]]);
+    expect(filterExactTitleResults(items, '无耻之徒英版')).toEqual([uk]);
+  });
+
+  it.each([
+    ['无耻之徒美版外传 第一季', '无耻之徒'],
+    ['无耻之徒外传美版 第一季', '无耻之徒'],
+    ['无耻之徒英版花絮', '无耻之徒'],
+    ['无耻之徒日版 第一季', '无耻之徒'],
+    ['无耻之徒英版 第一季', '无耻之徒美版'],
+    ['无耻之徒 第一季', '无耻之徒美版'],
+    ['无耻之徒美版 第二季', '无耻之徒美版 第1季'],
+    ['无耻之徒美版', '无耻之徒美版 第1季'],
+  ])('keeps regional search aliases exact %s / %s', (name, query) => {
+    expect(filterExactTitleResults([{ name }], query)).toEqual([]);
+  });
+
+  it('retains regional identities for the helper used by automatic source switching', () => {
+    expect(isExactTitleMatch('无耻之徒美版 第一季', '无耻之徒美版 第1季')).toBe(true);
+    expect(isExactTitleMatch('无耻之徒英版 第一季', '无耻之徒美版 第一季')).toBe(false);
+    expect(isExactTitleMatch('无耻之徒美版 第一季', '无耻之徒 第一季')).toBe(false);
   });
 });
 

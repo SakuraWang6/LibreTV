@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPlaybackSwitchUrl, canLinkLibraryProgress, clampResumePosition, episodeFromLabel, identityMismatch, isNativeMediaUrl, isPlayableEpisode, matchPlaybackEpisode, requestedResumePosition, titleSeason, type PlaybackIdentity } from './playback-source';
+import { buildPlaybackSwitchUrl, canLinkLibraryProgress, clampResumePosition, episodeFromLabel, identityMismatch, isMultipartMovie, isNativeMediaUrl, isPlayableEpisode, matchPlaybackEpisode, requestedResumePosition, titleSeason, type PlaybackIdentity } from './playback-source';
 import type { VideoDetail } from './types';
 import type { LibraryEntry } from './local-library/types';
 
@@ -30,6 +30,13 @@ describe('safe source and episode matching', () => {
   it('keeps the same episode even when the candidate order is reversed', () => {
     const reversed = detail({ episodeLabels: ['第3集', '第2集', '第1集'] });
     expect(matchPlaybackEpisode(current, result, reversed)).toEqual({ index: 0 });
+  });
+
+  it('maps a selected sparse playlist by its real label without falling back to an empty slot', () => {
+    const selected = detail({ episodes: ['', '', 'https://cdn.example/3.mp4'], episodeLabels: ['第1集', '第2集', '第3集'] });
+    expect(matchPlaybackEpisode(current, result, selected)).toEqual({ index: 2 });
+    expect(matchPlaybackEpisode({ ...current, episodeNumber: 2 }, result, selected)).toEqual({ reason: '本集没有可直接播放的视频' });
+    expect(isPlayableEpisode(selected.episodes[1], selected)).toBe(false);
   });
 
   it('rejects another season, remake year, short drama and prefix-only derivative', () => {
@@ -69,6 +76,59 @@ describe('safe source and episode matching', () => {
     const film = detail({ videoInfo: { title: '某电影', typeName: '剧情片', year: '2024', sourceKey: source.key, sourceName: source.name } });
     expect(matchPlaybackEpisode({ title: '某电影', kind: 'movie', episodeNumber: 2 }, { name: '某电影', typeName: '剧情片' }, film).index).toBeUndefined();
   });
+
+  it('keeps a collection and its standalone first film as different identities', () => {
+    const collection: PlaybackIdentity = { title: '教父1-3', kind: 'movie', year: '1972', episodeNumber: 2 };
+    const film = detail({ episodes: ['https://cdn.example/godfather-1972.mp4'], episodeLabels: ['正片'],
+      videoInfo: { title: '教父', typeName: '剧情片', year: '1972', sourceKey: source.key, sourceName: source.name } });
+    expect(identityMismatch(collection, { title: '教父', kind: 'movie', year: '1972' })).toBe('片名不一致');
+    expect(matchPlaybackEpisode(collection, { name: '教父', typeName: '剧情片', year: '1972' }, film).index).toBeUndefined();
+  });
+
+  it.each(['same-source', 'another-source'])('does not guess a collection part from its list position: %s', (sourceKey) => {
+    const collection = detail({ episodeLabels: ['3.1990集', '1.1972集', '2.1974集'],
+      videoInfo: { title: '教父1-3', typeName: '剧情片', year: '1972', sourceKey, sourceName: '来源' } });
+    for (const episodeNumber of [1, 2, 3]) {
+      expect(matchPlaybackEpisode({ title: '教父1-3', kind: 'movie', year: '1972', episodeNumber },
+        { name: '教父1-3', typeName: '剧情片' }, collection)).toEqual({ reason: '电影合集或分段版本需手动选择分部' });
+    }
+  });
+
+  it('carries a known multipart movie identity even when the candidate lists only one film', () => {
+    const collection = detail({ episodeLabels: ['第1部', '第2部', '第3部'],
+      videoInfo: { title: '某电影三部曲', typeName: '剧情片', year: '2000', sourceKey: source.key, sourceName: source.name } });
+    expect(isMultipartMovie(collection)).toBe(true);
+    const one = { ...collection, episodes: [collection.episodes[0]], episodeLabels: ['正片'] };
+    expect(matchPlaybackEpisode({ title: '某电影三部曲', kind: 'movie', year: '2000', episodeNumber: 1, multipartMovie: isMultipartMovie(collection) },
+      { name: '某电影三部曲', typeName: '剧情片' }, one).index).toBeUndefined();
+  });
+
+  it('keeps ordinary films and quality alternatives playable while refusing ambiguous multipart lists', () => {
+    const info = { title: '某电影', typeName: '剧情片', year: '2024', sourceKey: source.key, sourceName: source.name };
+    const single = detail({ episodes: ['https://cdn.example/film.mp4'], episodeLabels: ['正片'], videoInfo: info });
+    const quality = detail({ episodeLabels: ['HD中字', '1080P', '4K HDR'], videoInfo: info });
+    const identity: PlaybackIdentity = { title: '某电影', kind: 'movie', episodeNumber: 1 };
+    expect(isMultipartMovie(single)).toBe(false);
+    expect(isMultipartMovie(quality)).toBe(false);
+    expect(matchPlaybackEpisode(identity, { name: '某电影', typeName: '剧情片' }, single)).toEqual({ index: 0 });
+    expect(matchPlaybackEpisode(identity, { name: '某电影', typeName: '剧情片' }, quality)).toEqual({ index: 0 });
+    expect(isMultipartMovie({ ...quality, episodeLabels: undefined })).toBe(true);
+    expect(isMultipartMovie({ ...quality, episodeLabels: ['上部', '下部', '终章'] })).toBe(true);
+    expect(isMultipartMovie({ ...quality, episodeLabels: ['第2部', '第2部', '第2部'] })).toBe(true);
+  });
+
+  it('recognizes native media through only the local proxy query or legacy path', () => {
+    const media = 'https://cdn.example/film.mp4?token=a&x=1';
+    expect(isNativeMediaUrl(`/api/proxy?mediaContext=libvio&url=${encodeURIComponent(media)}`)).toBe(true);
+    expect(isNativeMediaUrl(`/api/proxy/${encodeURIComponent(media)}`)).toBe(true);
+    expect(isNativeMediaUrl(`/api/proxy?url=${encodeURIComponent('https://cdn.example/film.m3u8')}`)).toBe(false);
+    expect(isNativeMediaUrl(`https://external.example/api/proxy?url=${encodeURIComponent(media)}`)).toBe(false);
+    expect(isNativeMediaUrl(`/arbitrary/parser?url=${encodeURIComponent(media)}`)).toBe(false);
+    const nested = `http://localhost/api/proxy?url=${encodeURIComponent(media)}`;
+    expect(isNativeMediaUrl(`/api/proxy?url=${encodeURIComponent(nested)}`)).toBe(false);
+    expect(isNativeMediaUrl(`/api/proxy?url=${encodeURIComponent(media)}&url=${encodeURIComponent(media)}`)).toBe(false);
+    expect(isNativeMediaUrl('/api/proxy/%ZZ')).toBe(false);
+  });
 });
 
 describe('resume URL and disk progress association', () => {
@@ -103,5 +163,12 @@ describe('resume URL and disk progress association', () => {
     expect(canLinkLibraryProgress(entry(), current, unknown)).toBe(false);
     unknown.videoInfo.year = '2024';
     expect(canLinkLibraryProgress(entry(), current, unknown)).toBe(true);
+  });
+
+  it('does not associate a collection part with ambiguous old library metadata', () => {
+    const movie = detail({ episodeLabels: ['1.1972集', '2.1974集', '3.1990集'],
+      videoInfo: { title: '教父1-3', typeName: '剧情片', year: '1972', sourceKey: source.key, sourceName: source.name } });
+    const ambiguous = entry({ title: '教父1-3', kind: 'movie', year: '1972', seasonNumber: undefined, episodeNumber: undefined });
+    expect(canLinkLibraryProgress(ambiguous, { title: '教父1-3', kind: 'movie', year: '1972', episodeNumber: 2 }, movie)).toBe(false);
   });
 });
