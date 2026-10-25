@@ -222,6 +222,54 @@ describe('订阅同步的 store 语义', () => {
     expect(store().liveSelectedUrls).toEqual([shared]);
     expect(store().liveFavorites).toContain(exclusive);
   });
+
+  it('删除订阅保留无关直播源的顺序、字段、启用状态和观看历史', () => {
+    const a = 'https://a.example.com/list.json';
+    const b = 'https://b.example.com/list.json';
+    const manual = { url: 'https://live.example.com/manual.m3u', name: '手动', fromSubscriptions: [] };
+    const exclusive = { url: 'https://live.example.com/a.m3u', name: 'A 独占', fromSubscriptions: [a] };
+    const shared = { url: 'https://live.example.com/shared.m3u', name: '共享', epg: 'https://epg.example.com/list.xml', lastSync: 123, fromSubscriptions: [a, b] };
+    const other = { url: 'https://live.example.com/b.m3u', name: 'B 独占', fromSubscriptions: [b] };
+    const disabled = { url: 'https://live.example.com/disabled.m3u', name: '手动停用', fromSubscriptions: [] };
+    const recent = [manual, exclusive, shared, other, disabled].map((entry, index) => ({
+      url: `https://stream.example.com/${index}.m3u8`, name: entry.name, sourceUrl: entry.url, timestamp: index + 1,
+    }));
+    useAppStore.setState({
+      subscriptions: [{ url: a, name: 'A' }, { url: b, name: 'B', enabled: false }],
+      liveSubscriptions: [manual, exclusive, shared, other, disabled],
+      liveSelectedUrls: [other.url, exclusive.url, manual.url, shared.url],
+      liveFavorites: recent.map((entry) => entry.url),
+      liveRecent: recent,
+    });
+
+    store().removeSubscription(a);
+
+    expect(store().liveSubscriptions).toEqual([manual, { ...shared, fromSubscriptions: [b] }, other, disabled]);
+    expect(store().subscriptions).toEqual([{ url: b, name: 'B', enabled: false }]);
+    expect(store().liveSelectedUrls).toEqual([other.url, manual.url, shared.url]);
+    expect(store().liveRecent).toEqual(recent.filter((entry) => entry.sourceUrl !== exclusive.url));
+    expect(store().liveFavorites).toEqual(recent.map((entry) => entry.url));
+  });
+
+  it('删除不存在的订阅不移除任何无关直播源或观看状态', () => {
+    store().addSubscription('https://b.example.com/list.json', 'B');
+    store().addLiveSubscription('https://live.example.com/manual.m3u', '手动');
+    store().applySubscriptionLive('https://b.example.com/list.json', [{ name: 'B 独占', url: 'https://live.example.com/b.m3u' }]);
+    store().toggleLiveSelected('https://live.example.com/manual.m3u');
+    useAppStore.setState({
+      liveFavorites: ['https://stream.example.com/live.m3u8'],
+      liveRecent: [{ url: 'https://stream.example.com/live.m3u8', name: 'B 频道', sourceUrl: 'https://live.example.com/b.m3u', timestamp: 123 }],
+    });
+    const before = store();
+
+    store().removeSubscription('https://missing.example.com/list.json');
+
+    expect(store().liveSubscriptions).toEqual(before.liveSubscriptions);
+    expect(store().subscriptions).toEqual(before.subscriptions);
+    expect(store().liveSelectedUrls).toEqual(before.liveSelectedUrls);
+    expect(store().liveRecent).toEqual(before.liveRecent);
+    expect(store().liveFavorites).toEqual(before.liveFavorites);
+  });
 });
 
 describe('可撤销删除与订阅同步状态', () => {

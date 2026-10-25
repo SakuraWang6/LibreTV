@@ -426,20 +426,19 @@ export const useAppStore = create<AppState>()(
         const prefix = subKeyPrefix(url);
         // 多归属：删除订阅只移除自己的引用；仍被其他订阅共享的直播源保留，
         // 仅当没有任何订阅再引用时才移除条目（连同启用状态与最近观看，收藏始终保留）
-        const removedLive = get().liveSubscriptions
-          .filter((s) => s.fromSubscriptions.includes(url))
-          .map((s) => {
-            const rest = s.fromSubscriptions.filter((u) => u !== url);
-            return { entry: s, orphan: rest.length === 0, rest };
-          });
-        const orphanUrls = new Set(removedLive.filter((r) => r.orphan).map((r) => r.entry.url));
+        const orphanUrls = new Set<string>();
+        const liveSubscriptions = get().liveSubscriptions.flatMap((s) => {
+          if (!s.fromSubscriptions.includes(url)) return [s];
+          const rest = s.fromSubscriptions.filter((u) => u !== url);
+          if (rest.length > 0) return [{ ...s, fromSubscriptions: rest }];
+          orphanUrls.add(s.url);
+          return [];
+        });
         set({
           subscriptions: get().subscriptions.filter((s) => s.url !== url),
           customAPIs: get().customAPIs.filter((a) => !keyBelongsToSubscription(a.key, prefix)),
           selectedKeys: get().selectedKeys.filter((k) => !keyBelongsToSubscription(k, prefix)),
-          liveSubscriptions: removedLive
-            .filter((r) => !r.orphan)
-            .map((r) => ({ ...r.entry, fromSubscriptions: r.rest })),
+          liveSubscriptions,
           liveSelectedUrls: get().liveSelectedUrls.filter((u) => !orphanUrls.has(u)),
           // 收藏的频道是用户主动留下的，删除订阅时保留；其余残留状态一并清理
           liveRecent: get().liveRecent.filter((r) => !r.sourceUrl || !orphanUrls.has(r.sourceUrl)),
