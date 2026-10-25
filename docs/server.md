@@ -79,13 +79,15 @@ iPhone / iPad 离线前，在服务器播放器点「保存视频到设备」，
 
 ## 更新、备份与排查
 
-更新前确认没有活跃下载或导入任务，备份私有环境文件与完整库目录，再保留原挂载路径更新：
+更新前确认没有活跃下载或导入任务，备份私有环境文件与完整库目录。以下命令适用于 Git 工作树部署及本文的 Compose 示例；先拉取源码并构建成功，再更新运行服务：
 
 ```sh
-docker compose --env-file .env.library.local -f compose.library.yaml down
 git pull --ff-only
-docker compose --env-file .env.library.local -f compose.library.yaml up -d --build
+docker compose --env-file .env.library.local -f compose.library.yaml build web
+docker compose --env-file .env.library.local -f compose.library.yaml up -d
 ```
+
+`web` 构建的镜像由两个服务共用，更新时一并重建 `web` 和 `downloads`，避免版本不一致。已有部署若使用不同的 Compose 文件、环境文件或部署目录，沿用现有配置、项目名称及片库挂载；归档源码部署不直接执行 `git pull`，应先准备新版源码并构建成功。拉取或构建失败时，保留正在运行的服务。
 
 不要使用会删除持久数据的清理选项。历史源码和镜像可以按自己的回滚策略保留；清理步骤见 [开发说明](development.md)。
 
