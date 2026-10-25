@@ -7,7 +7,7 @@ import { migrateSkipMarks, type SkipMark, type SkipSegment } from './skip-marks'
 import { isQualityEntryFresh, mergeQualityEntries, qualityKey } from './quality';
 import { clearLiveProbeResultsDb, loadLiveProbeResults, saveLiveProbeResults } from './db';
 import { PERSIST_KEY, createThrottledStorage } from './persist-storage';
-import { isLibvioSource } from './providers/libvio/source';
+import { isSupportedSource } from './source-config';
 
 /**
  * 全局设置（zustand + localStorage 持久化）。
@@ -349,6 +349,7 @@ export const useAppStore = create<AppState>()(
       addCustomApi: (api) => {
         const list = get().customAPIs;
         const entry: SourceConfig = { ...api, key: api.key || nextCustomKey(list) };
+        if (!isSupportedSource(entry)) return;
         // 成人内容过滤开启时，成人源默认不勾选（用户可在关闭过滤后手动勾选）
         const selectable = !(entry.isAdult && get().yellowFilter);
         set({
@@ -358,6 +359,8 @@ export const useAppStore = create<AppState>()(
       },
 
       updateCustomApi: (key, patch) => {
+        const current = get().customAPIs.find((entry) => entry.key === key);
+        if (!current || !isSupportedSource({ ...current, ...patch })) return;
         // 源被标记为成人内容且过滤开启时，同步取消勾选
         const drop = patch.isAdult === true && get().yellowFilter;
         set({
@@ -379,7 +382,7 @@ export const useAppStore = create<AppState>()(
 
       restoreCustomApi: ({ entry, selected }) => {
         // key 已被重新占用（如订阅重新同步生成了同 key 的源）时放弃撤销，避免出现重复条目
-        if (get().customAPIs.some((a) => a.key === entry.key)) return false;
+        if (!isSupportedSource(entry) || get().customAPIs.some((a) => a.key === entry.key)) return false;
         set({
           customAPIs: [...get().customAPIs, entry],
           selectedKeys: selected ? [...get().selectedKeys, entry.key] : get().selectedKeys,
@@ -402,6 +405,7 @@ export const useAppStore = create<AppState>()(
       setSelectedKeys: (keys) => set({ selectedKeys: keys }),
 
       setEnvSources: (list) => {
+        list = list.filter(isSupportedSource);
         // 预置源首次出现时自动勾选（开箱即搜）；用户此后取消勾选不会被反复勾回
         const seen = new Set(get().envKeysSeen);
         const freshKeys = list.map((s) => s.key).filter((k) => !seen.has(k));
@@ -496,6 +500,7 @@ export const useAppStore = create<AppState>()(
       },
 
       applySubscriptionSources: (subUrl, list) => {
+        list = list.filter((source) => isSupportedSource({ ...source, key: 'subscription' }));
         const prefix = subKeyPrefix(subUrl);
         // 与订阅源 URL 相同的手动添加源视为重复，避免同步后出现双份
         const subUrls = new Set(list.map((s) => s.url.replace(/\/+$/, '')));
@@ -855,9 +860,18 @@ export const useAppStore = create<AppState>()(
       //     与旧行为完全一致，因此无需改写存量数据，仅借版本号让 migrate 跑一遍。
       // 此前未声明 version 的存量数据会被视为 v0 并走 migrate 补齐。
       // v9: re-probe old height-only snapshots once so cropped 4K gains its width.
-      version: 9,
+      // v10: drop retired website sources while retaining the settings namespace.
+      version: 10,
       migrate: (persisted, version) => {
         const state = { ...((persisted ?? {}) as Partial<AppState>) };
+        const persistedSources: unknown[] = Array.isArray(state.customAPIs) ? state.customAPIs : [];
+        const removedKeys = new Set<string>();
+        for (const source of persistedSources) {
+          if (!isSupportedSource(source) && source && typeof source === 'object'
+            && 'key' in source && typeof source.key === 'string') removedKeys.add(source.key);
+        }
+        state.customAPIs = persistedSources.filter(isSupportedSource);
+        if (Array.isArray(state.selectedKeys)) state.selectedKeys = state.selectedKeys.filter((key) => !removedKeys.has(key));
         if (version < 9) state.qualityMap = {};
         if (!Array.isArray(state.liveRecent)) state.liveRecent = [];
         if (!Array.isArray(state.liveSubscriptions)) state.liveSubscriptions = [];
@@ -976,18 +990,20 @@ export async function hydrateLiveProbeResults(): Promise<void> {
 export function resolveSource(
   store: Pick<AppState, 'customAPIs' | 'envSources'>,
   key: string,
-  fallback?: { url?: string; detail?: string; name?: string; kind?: SourceConfig['kind']; sourceKind?: SourceConfig['kind'] }
+  fallback?: { url?: string; detail?: string; name?: string; kind?: string; sourceKind?: string }
 ): SourceConfig | undefined {
+  if ((fallback?.kind !== undefined && fallback.kind !== 'cms')
+    || (fallback?.sourceKind !== undefined && fallback.sourceKind !== 'cms')) return undefined;
   const found = store.customAPIs.find((a) => a.key === key) ?? store.envSources.find((a) => a.key === key);
-  if (found) return found;
+  if (found) return isSupportedSource(found) ? found : undefined;
   if (fallback?.url) {
-    return {
+    const source = {
       key,
-      ...((fallback.kind === 'libvio' || fallback.sourceKind === 'libvio' || isLibvioSource({ url: fallback.url })) ? { kind: 'libvio' as const } : {}),
       name: fallback.name || '自定义源',
       url: fallback.url,
       detail: fallback.detail,
     };
+    return isSupportedSource(source) ? source : undefined;
   }
   return undefined;
 }

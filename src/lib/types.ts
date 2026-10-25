@@ -1,8 +1,5 @@
-import type { MediaContext } from './media-context';
-
 // 采集站（Apple CMS 资源站）描述
 export interface SourceConfig {
-  kind?: 'cms' | 'libvio';
   /** 唯一标识，如 "custom_0"；内置源直接用短名 */
   key: string;
   name: string;
@@ -14,8 +11,6 @@ export interface SourceConfig {
 }
 
 export interface SearchResultItem {
-  sourceKind?: 'cms' | 'libvio';
-  pageUrl?: string;
   sourceKey: string;
   sourceName: string;
   vodId: string;
@@ -47,13 +42,7 @@ export interface VideoInfo {
 
 export interface VideoDetail {
   episodes: string[];
-  mediaContext?: MediaContext;
   episodeLabels?: string[];
-  episodeSeasons?: number[];
-  playbackType?: 'media' | 'external' | 'download-only' | 'browser-required' | 'unavailable';
-  pageUrl?: string;
-  message?: string;
-  externalLinks?: { label: string; url: string }[];
   videoInfo: VideoInfo;
 }
 

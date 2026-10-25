@@ -14,23 +14,23 @@ beforeEach(async () => { directory = await fs.mkdtemp(path.join(os.tmpdir(), 'li
 afterEach(async () => { await fs.rm(directory, { recursive: true, force: true }); vi.unstubAllEnvs(); });
 
 describe('background media never passes upstream playlists to ffmpeg', () => {
-  it('retains public source context through playlist nesting and resource reads', async () => {
+  it('resolves nested playlists and reads segments without source-specific headers', async () => {
     upstream.mockResolvedValueOnce({ res: new Response('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nchild.m3u8', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } }), finalUrl: 'https://cdn.example/master.m3u8' });
     upstream.mockResolvedValueOnce({ res: new Response('#EXTM3U\n#EXTINF:3,\nseg.ts\n#EXT-X-ENDLIST'), finalUrl: 'https://cdn.example/child.m3u8' });
-    const plan = await createMediaPlan('https://cdn.example/master.m3u8', signal(), 'libvio');
+    const plan = await createMediaPlan('https://cdn.example/master.m3u8', signal());
     upstream.mockResolvedValueOnce({ res: new Response('segment'), finalUrl: plan.resources[0].url });
-    await downloadResource(plan.resources[0], directory, signal(), 0, 'libvio');
-    for (const [, options] of upstream.mock.calls) expect(options.mediaContext).toBe('libvio');
+    await downloadResource(plan.resources[0], directory, signal(), 0);
+    for (const [, options] of upstream.mock.calls) expect(options).not.toHaveProperty('mediaContext');
     expect(upstream.mock.calls[2][1]).not.toHaveProperty('idleTimeoutMs');
   });
 
-  it('uses a resettable idle deadline only for contextual whole MP4 files', async () => {
+  it('uses a resettable idle deadline for whole MP4 files', async () => {
     upstream.mockResolvedValueOnce({ res: new Response('not downloaded during planning', { headers: { 'content-type': 'video/mp4' } }), finalUrl: 'https://cdn.example/movie.mp4' });
-    const plan = await createMediaPlan('https://cdn.example/movie.mp4', signal(), 'libvio');
+    const plan = await createMediaPlan('https://cdn.example/movie.mp4', signal());
     expect(plan.resources[0].mediaFile).toBe(true);
     upstream.mockResolvedValueOnce({ res: new Response('whole MP4'), finalUrl: plan.resources[0].url });
-    await downloadResource(plan.resources[0], directory, signal(), 0, 'libvio');
-    expect(upstream.mock.calls[1][1]).toMatchObject({ timeoutMs: 15_000, idleTimeoutMs: 30_000, mediaContext: 'libvio' });
+    await downloadResource(plan.resources[0], directory, signal(), 0);
+    expect(upstream.mock.calls[1][1]).toMatchObject({ timeoutMs: 15_000, idleTimeoutMs: 30_000 });
   });
 
   it('resolves every media/key/map URI itself and uses exact large sequence IVs', () => {

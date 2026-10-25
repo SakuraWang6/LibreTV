@@ -38,16 +38,8 @@ export interface LiveProbeResult {
 /** /api/status 的 React Query key：Providers 与 AuthProvider 共用，避免同一页面重复请求 */
 export const STATUS_QUERY_KEY = ['app-status'] as const;
 
-export interface DetailSelection {
-  index?: number;
-  episodeNumber?: number;
-  seasonNumber?: number;
-}
-
-/** LIBVIO resolves one selected slot; other providers return their full URLs. */
-export function videoDetailQueryKey(source: SourceConfig | undefined, id: string, index = 0) {
-  const key = ['detail', source?.key, id, source?.url, source?.kind];
-  return source?.kind === 'libvio' ? [...key, index] : key;
+export function videoDetailQueryKey(source: SourceConfig | undefined, id: string) {
+  return ['detail', source?.key, id, source?.url];
 }
 
 export function onUnauthorized(handler: (event: CustomEvent) => void): () => void {
@@ -153,11 +145,8 @@ export const api = {
     return searchStream(wd, sources, filterAdult, onSource, signal);
   },
 
-  detail: (id: string, source: SourceConfig, signal?: AbortSignal, selection?: DetailSelection) => {
+  detail: (id: string, source: SourceConfig, signal?: AbortSignal) => {
     const sp = new URLSearchParams({ id, source: JSON.stringify(source) });
-    for (const [key, value] of Object.entries(selection || {})) {
-      if (value !== undefined) sp.set(key, String(value));
-    }
     return request<VideoDetail>(`/api/detail?${sp.toString()}`, { signal });
   },
 
@@ -226,10 +215,10 @@ export const api = {
   },
 
   /** 换源：按标题跨源搜索并取详情，附带接口耗时（测速）；支持 signal 以便关闭弹窗时中止在途请求 */
-  detailSpeed: async (id: string, source: SourceConfig, signal?: AbortSignal, selection?: DetailSelection) => {
+  detailSpeed: async (id: string, source: SourceConfig, signal?: AbortSignal) => {
     const start = performance.now();
     try {
-      const detail = await api.detail(id, source, signal, selection);
+      const detail = await api.detail(id, source, signal);
       return { ok: true, ms: Math.round(performance.now() - start), detail };
     } catch (err) {
       return { ok: false, ms: Math.round(performance.now() - start), detail: undefined as VideoDetail | undefined, error: err instanceof Error ? err.message : '失败' };

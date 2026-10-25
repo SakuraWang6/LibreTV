@@ -19,7 +19,6 @@ import { changeBackgroundDownload, createBackgroundDownload, fetchBackgroundDown
 import type { BackgroundDownloadStatus, BackgroundDownloadTask } from '@/lib/background-downloads/types';
 import Link from 'next/link';
 import { Switch } from './settings-shared';
-import type { MediaContext } from '@/lib/media-context';
 
 /**
  * 全局下载管理器（UI 采用本站 Drawer 模式）：
@@ -44,7 +43,11 @@ export interface AddDownloadPayload {
   title: string;
   format?: 'TS' | 'MP4';
   libraryMetadata?: LibraryMetadata;
-  mediaContext?: MediaContext;
+}
+
+function hasRetiredDownloadSource(value: object): boolean {
+  const record = value as Record<string, unknown>;
+  return ['provider', 'quark', 'mediaContext'].some((key) => record[key] !== undefined);
 }
 
 /** 运行中的任务句柄（不进持久化） */
@@ -150,6 +153,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     const stopWriting = () => { void target?.abort().catch(() => {}); };
     handle.abort.signal.addEventListener('abort', stopWriting, { once: true });
     try {
+      if (hasRetiredDownloadSource(entry)) throw new Error('该任务使用已移除的来源，请删除此记录');
       await updateEntry(entry.id, { status: 'downloading' });
       if (!target || entry.saveDestination === 'library') throw new Error('请点击「继续」重新建立下载任务');
       if (handle.abort.signal.aborted) return;
@@ -173,7 +177,6 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         signal: handle.abort.signal,
         pause: handle.pause,
         proxy,
-        mediaContext: entry.mediaContext,
         onProgress,
         target,
       });
@@ -237,10 +240,11 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         const id = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         let target: SaveTarget | undefined;
         try {
+          if (hasRetiredDownloadSource(detail)) throw new Error('不再支持此下载来源');
           // Query at the click as well: a mount-time 401 before login must never disable the library permanently.
           const useLibrary = await checkLibrary();
           if (useLibrary) {
-            await createBackgroundDownload(detail.url, detail.libraryMetadata ?? guessLibraryMetadata(detail.title), undefined, detail.mediaContext);
+            await createBackgroundDownload(detail.url, detail.libraryMetadata ?? guessLibraryMetadata(detail.title));
             await refreshBackground();
             toast(`《${detail.title}》已加入下载队列`, 'success');
             return;
@@ -248,7 +252,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           target = await pickSaveTarget(`${detail.title}.${format.toLowerCase()}`);
           targets.current.set(id, target);
           const entry: DownloadTaskEntry = {
-            id, url: detail.url, mediaContext: detail.mediaContext, title: detail.title, format,
+            id, url: detail.url, title: detail.title, format,
             libraryMetadata: detail.libraryMetadata ?? guessLibraryMetadata(detail.title),
             saveDestination: 'file',
             status: 'waiting', finished: 0, total: 0, errorNum: 0,
@@ -297,11 +301,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     }
     if (entry.status === 'completed') return;
     try {
+      if (hasRetiredDownloadSource(entry)) throw new Error('该任务使用已移除的来源，请删除此记录');
       const useLibrary = entry.saveDestination === 'library'
         || (entry.saveDestination === undefined && await checkLibrary());
       if (useLibrary) {
         // Transfer legacy browser work only after the durable server creation has been acknowledged.
-        await createBackgroundDownload(entry.url, entry.libraryMetadata ?? guessLibraryMetadata(entry.title), `browser:${entry.id}`, entry.mediaContext);
+        await createBackgroundDownload(entry.url, entry.libraryMetadata ?? guessLibraryMetadata(entry.title), `browser:${entry.id}`);
         await clearDownloadChunks(entry.id);
         await db.downloads.delete(entry.id);
         refresh();
@@ -405,13 +410,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
           const active = ['queued', 'downloading', 'processing'].includes(task.status);
           const progress = task.total > 0 ? Math.min(100, Math.round(task.finished / task.total * 100)) : 0;
           const episode = task.metadata.kind === 'tv' ? task.metadata.episodeTitle || (task.metadata.episodeNumber ? `第 ${task.metadata.episodeNumber} 集` : '') : '';
-          const quarkTask = 'provider' in task && task.provider === 'quark';
           return (
             <div key={task.id} className="card p-3 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm text-content truncate">{task.title}{episode ? ` · ${episode}` : ''}</p>
-                  <p className="text-xs text-faint">{quarkTask ? '夸克' : 'MP4'} · {backgroundStatusLabel[task.status]}{(task.status === 'downloading' || task.status === 'paused') && task.total > 0 ? ` · ${progress}%` : ''}{quarkTask && task.total > 0 ? ` · ${formatDownloadBytes(task.finished)} / ${formatDownloadBytes(task.total)}` : task.bytes > 0 ? ` · ${formatDownloadBytes(task.bytes)}` : ''}</p>
+                  <p className="text-xs text-faint">MP4 · {backgroundStatusLabel[task.status]}{(task.status === 'downloading' || task.status === 'paused') && task.total > 0 ? ` · ${progress}%` : ''}{task.bytes > 0 ? ` · ${formatDownloadBytes(task.bytes)}` : ''}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {task.status === 'completed' && task.libraryItemId && <Link href={`/library/play/${encodeURIComponent(task.libraryItemId)}`} onClick={onClose} className="px-2 py-1 rounded bg-chip hover:bg-hover text-xs text-content">播放</Link>}

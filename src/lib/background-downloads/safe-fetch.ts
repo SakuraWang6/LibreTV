@@ -5,7 +5,6 @@ import { isIP, type LookupFunction } from 'node:net';
 import { Readable } from 'node:stream';
 import { checkUpstreamAllowed, isValidProxyUrl } from '@/lib/ssrf';
 import { nonPublicAddress, resolveTrustedDns, trustedDnsConfigured } from './trusted-dns';
-import { mediaContextHeaders, type MediaContext } from '@/lib/media-context';
 
 /** DNS results are pinned into the socket lookup, closing the precheck/fetch
  * re-resolution gap. Every redirect gets a fresh check and a fresh pinned set. */
@@ -20,7 +19,7 @@ export async function publicAddresses(url: URL, signal?: AbortSignal): Promise<A
   return answers.sort((a, b) => a.family - b.family);
 }
 
-export async function fetchDownloadResource(url: string, options: { signal: AbortSignal; timeoutMs: number; mediaContext?: MediaContext; idleTimeoutMs?: number }): Promise<{ res: Response; finalUrl: string }> {
+export async function fetchDownloadResource(url: string, options: { signal: AbortSignal; timeoutMs: number; idleTimeoutMs?: number }): Promise<{ res: Response; finalUrl: string }> {
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, options.idleTimeoutMs ? controller.signal : AbortSignal.timeout(options.timeoutMs)]);
   let current = url;
@@ -41,7 +40,7 @@ export async function fetchDownloadResource(url: string, options: { signal: Abor
       };
       incoming = await new Promise<http.IncomingMessage>((resolve, reject) => {
         const transport = target.protocol === 'https:' ? https : http;
-        const request = transport.request(target, { method: 'GET', signal, lookup, agent: false, headers: { Accept: '*/*', ...mediaContextHeaders(options.mediaContext) } }, resolve);
+        const request = transport.request(target, { method: 'GET', signal, lookup, agent: false, headers: { Accept: '*/*' } }, resolve);
         request.once('error', reject);
         request.end();
       });

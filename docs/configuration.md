@@ -36,12 +36,6 @@ Mac 配置由 Bash `source`，密码、JSON 和含空格的路径使用单引号
 DEFAULT_SOURCES='[{"name":"自己的片源","url":"https://example.com/api.php/provide/vod"}]'
 ```
 
-LIBVIO 由网页适配器处理，显式配置 `kind`：
-
-```sh
-DEFAULT_SOURCES='[{"name":"LIBVIO","url":"https://libvio.host","kind":"libvio"}]'
-```
-
 这只是格式示例，不保证网站当时可用。预置点播源按数组位置生成 `env_0` 等编号，调整已有条目顺序会改变来源对应关系；追加源时保留原顺序。
 
 ## 请求与搜索
@@ -80,16 +74,13 @@ DEFAULT_SOURCES='[{"name":"LIBVIO","url":"https://libvio.host","kind":"libvio"}]
 
 同步同时需要本地 `LOCAL_LIBRARY_DIR`。`curl` 传输不使用显式代理和用户 curl 配置，保留证书检查，不跟随重定向。启用 `LIBRARY_SERVER_PROXY` 还需 Node 22.21+ 或 24.5+；Mac 启动器会检查支持情况。
 
-## Mac 接入与启动器
+## Mac 启动器
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `NODE_BINARY` | 启动脚本 PATH 中的 Node | Node 可执行文件的完整路径 |
-| `LIBVIO_BROWSER_SOCKET` | 未配置时不启动可选桥接 | 本机 Unix socket 的绝对路径；还需安装独立浏览器桥依赖 |
-| `LIBVIO_BROWSER_PROFILE` | `.local/libvio-browser-profile` | LIBVIO 专用 Chrome 资料目录 |
-| `QUARK_RUNTIME_DIR` | 不启用夸克 | 已准备、校验通过的夸克运行目录绝对路径 |
 
-LIBVIO 需要已安装的 Google Chrome；媒体目录索引和夸克接口还要求本机免登录模式。目录通过页面显式选择或填写路径后登记，没有额外的目录环境变量。准备与授权分别见 [Mac 说明](macos.md)、[浏览器桥](../scripts/libvio-browser/README.md) 和 [夸克](quark.md)。不要迁移或公开资料目录中的凭据。
+媒体目录索引需要本机免登录模式。目录通过页面显式选择或填写路径后登记，没有额外的目录环境变量，操作见 [Mac 说明](macos.md)。
 
 ## Compose 与内部变量
 
@@ -97,4 +88,4 @@ LIBVIO 需要已安装的 Google Chrome；媒体目录索引和夸克接口还�
 
 旧 `docker-compose.yml` 的 `LIBRETV_IMAGE` 用于选择上游镜像，不适用于获取本分支新增功能；本分支按服务器文档从源码构建。
 
-`APP_VERSION` 由构建读取 `package.json` 注入。`LIBRETV_LOCAL_AUTH_BIND` 和 `LIBRETV_QUARK_*` 是启动器的内部运行变量，不是用户配置入口。
+`APP_VERSION` 由构建读取 `package.json` 注入。`LIBRETV_LOCAL_AUTH_BIND` 是启动器的内部运行变量，不是用户配置入口。

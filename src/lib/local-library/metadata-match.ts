@@ -3,7 +3,7 @@
 import { api } from '@/lib/client-api';
 import { isExactTitleMatch, isNumberedCollectionTitle } from '@/lib/cms-parser';
 import { playbackKind, titleSeason } from '@/lib/playback-source';
-import { isLibvioSource } from '@/lib/providers/libvio/source';
+import { isSupportedSource } from '@/lib/source-config';
 import type { SearchResultItem, SourceConfig, VideoDetail } from '@/lib/types';
 import { guessLibraryMetadata } from './filename';
 import type { LibraryMetadata } from './types';
@@ -86,7 +86,7 @@ export async function matchLibraryMetadata(metadata: LibraryMetadata, sources: S
   if (identity.kind === 'tv' && namedSeason !== undefined && identity.seasonNumber !== undefined && namedSeason !== identity.seasonNumber) return unchanged('unmatched');
   const seenSources = new Set<string>();
   const selected = sources.filter((source) => {
-    if (source.isAdult || isLibvioSource(source) || seenSources.has(source.url)) return false;
+    if (!isSupportedSource(source) || source.isAdult || seenSources.has(source.url)) return false;
     seenSources.add(source.url);
     return true;
   });

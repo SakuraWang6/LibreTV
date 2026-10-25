@@ -7,7 +7,6 @@ import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { Writable } from 'node:stream';
 import { fetchDownloadResource } from './safe-fetch';
-import type { MediaContext } from '@/lib/media-context';
 
 const MAX_MANIFEST = 2 * 1024 * 1024;
 const MAX_RESOURCES = 30_000;
@@ -105,16 +104,16 @@ export function parseMediaPlaylist(text: string, base: string): MediaPlan {
   return { version: 1, input: 'assembled.bin', pieces, resources };
 }
 
-export async function createMediaPlan(url: string, signal: AbortSignal, mediaContext?: MediaContext, depth = 0): Promise<MediaPlan> {
+export async function createMediaPlan(url: string, signal: AbortSignal, depth = 0): Promise<MediaPlan> {
   if (depth > 4) throw new Error('播放列表嵌套过多');
-  const { res, finalUrl } = await fetchDownloadResource(url, { signal, timeoutMs: 30_000, mediaContext });
+  const { res, finalUrl } = await fetchDownloadResource(url, { signal, timeoutMs: 30_000 });
   if (!res.ok) { await res.body?.cancel(); throw new Error(`来源请求失败（HTTP ${res.status}）`); }
   const type = res.headers.get('content-type') ?? '';
   const playlist = /mpegurl|m3u/i.test(type) || /\.m3u8(?:$|[?#])/i.test(finalUrl);
   if (!playlist) {
     await res.body?.cancel();
     if (!/^video\//i.test(type) && !/\.(?:mp4|m4v|mov|webm|ts)(?:$|[?#])/i.test(finalUrl)) throw new Error('来源未返回 HLS 清单或支持的视频文件');
-    const mediaFile = mediaContext === 'libvio' && (/\bvideo\/mp4\b/i.test(type) || /\.(?:mp4|m4v|mov)(?:$|[?#])/i.test(finalUrl));
+    const mediaFile = /\bvideo\/mp4\b/i.test(type) || /\.(?:mp4|m4v|mov)(?:$|[?#])/i.test(finalUrl);
     return { version: 1, input: 'r000000.bin', resources: [{ url: finalUrl, name: 'r000000.bin', ...(mediaFile ? { mediaFile: true } : {}) }] };
   }
   const text = await manifestBody(res);
@@ -131,7 +130,7 @@ export async function createMediaPlan(url: string, signal: AbortSignal, mediaCon
     }
     const variant = variants.filter((entry) => !entry.externalAudio).sort((a, b) => b.bandwidth - a.bandwidth)[0];
     if (!variant) throw new Error('该来源音画分离，暂不支持后台保存，请更换来源');
-    return createMediaPlan(variant.url, signal, mediaContext, depth + 1);
+    return createMediaPlan(variant.url, signal, depth + 1);
   }
   return parseMediaPlaylist(text, finalUrl);
 }
@@ -146,7 +145,7 @@ export async function requireFreeSpace(directory: string, required = 0): Promise
   if (Number(stat.bavail) * Number(stat.bsize) < RESERVE_BYTES + required) throw new Error('磁盘空间不足，后台下载已停止以保留 512 MiB 可用空间');
 }
 
-export async function downloadResource(resource: Resource, directory: string, signal: AbortSignal, priorBytes: number, mediaContext?: MediaContext): Promise<number> {
+export async function downloadResource(resource: Resource, directory: string, signal: AbortSignal, priorBytes: number): Promise<number> {
   const destination = path.join(directory, resource.name);
   try {
     const stat = await fs.lstat(destination);
@@ -160,8 +159,8 @@ export async function downloadResource(resource: Resource, directory: string, si
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
       signal.throwIfAborted(); await requireFreeSpace(directory);
-      const streamingFile = mediaContext === 'libvio' && resource.mediaFile === true && !resource.key;
-      const { res } = await fetchDownloadResource(resource.url, { signal, timeoutMs: streamingFile ? 15_000 : 90_000, mediaContext, ...(streamingFile ? { idleTimeoutMs: 30_000 } : {}) });
+      const streamingFile = resource.mediaFile === true && !resource.key;
+      const { res } = await fetchDownloadResource(resource.url, { signal, timeoutMs: streamingFile ? 15_000 : 90_000, ...(streamingFile ? { idleTimeoutMs: 30_000 } : {}) });
       if (!res.ok || !res.body) { await res.body?.cancel(); throw new Error(`来源分片请求失败（HTTP ${res.status}）`); }
       if (Number(res.headers.get('content-length')) > maximum) { await res.body.cancel(); throw new Error('视频文件超过空间限制'); }
       await fs.rm(temporary, { force: true });

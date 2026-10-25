@@ -8,6 +8,7 @@ import { canAdoptLibraryProgressVersion } from '@/lib/local-library/progress-ver
 import { PlaybackSourcePicker } from '@/components/switch-source';
 import { useToast } from '@/components/toast';
 import { buildPlaybackSwitchUrl, matchPlaybackEpisode, type PlaybackSelection } from '@/lib/playback-source';
+import { videoDetailQueryKey } from '@/lib/client-api';
 import { LibraryIcon, episodeLabel, percentPlayed, plainDescription, timeLabel, unfinished } from './library-ui';
 import styles from './library.module.css';
 
@@ -150,7 +151,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
     const media = video.current;
     const position = playback.current.loaded && media ? media.currentTime : entry.position || 0;
     if (media && playback.current.loaded) { syncPlayback(media); save(); media.pause(); }
-    queryClient.setQueryData(['detail', selection.source.key, selection.result.vodId, selection.source.url, selection.source.kind], selection.detail);
+    queryClient.setQueryData(videoDetailQueryKey(selection.source, selection.result.vodId), selection.detail);
     router.push(buildPlaybackSwitchUrl({ ...selection, index: match.index }, position, entry.id));
   };
 

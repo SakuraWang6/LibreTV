@@ -1,16 +1,16 @@
 # 数据源与订阅
 
-仓库不内置影视内容或可用片源清单。源配置保存采集接口、网站或直播播放列表地址，搜索与播放时再向对应提供方读取信息。地址有效不代表所有影片都能播放、下载或达到相同画质。
+仓库不内置影视内容或可用片源清单。源配置保存采集接口或直播播放列表地址，搜索与播放时再向对应提供方读取信息。地址有效不代表所有影片都能播放、下载或达到相同画质。
 
 ## 添加与预置
 
 在「设置 → 源管理」中添加点播源或直播源，或在「数据源订阅」中填写源列表 JSON 地址。部署者也可通过 `DEFAULT_SOURCES`、`DEFAULT_LIVE_SOURCES`、`DEFAULT_SUBSCRIPTIONS` 预置；环境文件的写法见 [配置参考](configuration.md)。配置保存在当前部署或浏览器，不能依靠它同步影视库观看进度。
 
-点播源通常使用 Apple CMS JSON 采集接口。`SourceConfig` 的 `kind` 可为 `cms` 或 `libvio`，省略时按地址识别；LIBVIO 是专用网页适配，仅在 Mac 上使用已配置的 Chrome 会话，并只接受代码中支持的 HTTPS 线路。把任意网址标记成 `libvio` 不会获得通用网页解析能力，见 [浏览器桥](../scripts/libvio-browser/README.md)。
+点播源使用 Apple CMS JSON 采集接口，填写接口地址；普通网页或网盘分享链接不能作为点播源。
 
-直播源使用 M3U/M3U8 播放列表，可附 XMLTV 节目单地址。站点返回的网盘分享、外部下载入口与可直接播放的视频地址有不同处理；读取到分享链接不代表已经拿到媒体流。夸克入口及当前限制见 [夸克分享](quark.md)。
+直播源使用 M3U/M3U8 播放列表，可附 XMLTV 节目单地址。播放和后台下载使用来源提供的直媒体地址。
 
-## LibreTV 源列表
+## LibreTV-SourceList 源列表
 
 下面仅展示格式，`example.com` 地址不是可用片源：
 
@@ -21,7 +21,6 @@
   "sources": [
     {
       "name": "点播示例",
-      "kind": "cms",
       "url": "https://example.com/api.php/provide/vod",
       "detail": "https://example.com",
       "isAdult": false
@@ -44,7 +43,6 @@
 | `sources` | 点播数组，最多保留 100 个有效且去重的地址 |
 | `sources[].url` | 必填的 HTTP(S) 地址 |
 | `sources[].name` | 可选，缺省使用地址主机名；标识由导入端生成 |
-| `sources[].kind` | 可选的 `cms` / `libvio`，后者仍受 Mac 浏览器接入限制 |
 | `sources[].detail` | 可选详情页根地址，供部分采集源补充读取详情 |
 | `sources[].isAdult` | 仅 `true` 表示成人源，缺省为 `false` |
 | `liveSources` | 直播数组，最多保留 50 个有效且去重的地址 |

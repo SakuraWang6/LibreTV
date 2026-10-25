@@ -59,6 +59,14 @@ beforeEach(() => {
 });
 
 describe('POST /api/quality', () => {
+  it('filters retired source configurations before cache and probe dispatch', async () => {
+    const response = await POST(post([
+      { source: { key: 'old', name: 'Old', url: 'https://libvio.host' }, id: '1' },
+      { source: { key: 'old', name: 'Old', url: 'https://s.test/api', kind: 'libvio' }, id: '1' },
+    ]));
+    expect(response.status).toBe(400);
+    expect(state.calls).toBe(0);
+  });
   it('同 URL + detail + 影片的多条请求合并成一次上游探测，但结果按各自 sourceKey 返回', async () => {
     // 同一份资源挂了两个源（订阅 + 自定义常见），url 与 id 相同、sourceKey 不同
     const res = await POST(post([item('a', 'https://s.test/api'), item('b', 'https://s.test/api')]));

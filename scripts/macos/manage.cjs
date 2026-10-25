@@ -9,7 +9,6 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { syncWorkerEnvironment } = require('../library-sync-environment.cjs');
 const { localWebServer } = require('./local-auth.cjs');
-const { superviseBrowser } = require('./optional-browser.cjs');
 
 const root = path.resolve(__dirname, '../..');
 const manager = __filename;
@@ -123,7 +122,7 @@ async function stop() {
     if (ownsProcess(state)) throw new Error(`进程 ${state.pid} 未完成退出，请检查日志；未强制终止其他进程。`);
   }
   if (!ownsProcess(readState())) fs.rmSync(stateFile, { force: true });
-  console.log('LibreTV 已停止。若安装了登录自启，下次登录仍会启动。');
+  console.log('光影已停止。若安装了登录自启，下次登录仍会启动。');
 }
 
 async function start() {
@@ -131,7 +130,7 @@ async function start() {
   assertOwnPlist();
   if (ownsProcess(readState())) {
     await waitForHealthy();
-    console.log(`LibreTV 已在运行：${url}`);
+    console.log(`光影已在运行：${url}`);
     return;
   }
   if (await portBusy()) throw new Error('127.0.0.1:8899 已被其他进程占用，未启动或终止任何占用进程。');
@@ -149,22 +148,20 @@ async function start() {
     } finally { fs.closeSync(fd); }
   }
   await waitForHealthy();
-  console.log(`LibreTV 已启动：${url}\n日志：${logFile}`);
+  console.log(`光影已启动：${url}\n日志：${logFile}`);
 }
 
 async function run() {
   prerequisites();
   const token = process.argv[process.argv.indexOf('--instance') + 1];
   if (!token || !/^[\w-]+$/.test(token)) throw new Error('缺少有效进程标记。');
-  if (ownsProcess(readState())) throw new Error('LibreTV 已运行，未重复启动。');
+  if (ownsProcess(readState())) throw new Error('光影已运行，未重复启动。');
   if (await portBusy()) throw new Error('127.0.0.1:8899 已被占用，未启动或终止占用进程。');
   // Exclusive creation prevents two simultaneous launch requests from claiming the same server.
   if (readState() && !ownsProcess(readState())) fs.rmSync(stateFile, { force: true });
   fs.writeFileSync(stateFile, JSON.stringify({ pid: process.pid, token, root, startedAt: new Date().toISOString() }), { flag: 'wx', mode: 0o600 });
   const children = [];
   let killTimer;
-  let stopBrowser;
-  let browserStopped;
   let stopping = false;
   const cleanup = () => { clearTimeout(killTimer); forgetState(token); };
   process.once('exit', cleanup);
@@ -172,10 +169,8 @@ async function run() {
     const terminate = () => {
       if (stopping) return;
       stopping = true;
-      browserStopped = stopBrowser?.();
       for (const child of children) child.kill('SIGTERM');
-      // Official Quark downloads save their chunks on SIGINT before the worker
-      // exits. Leave time for that child and its bounded checkpoint cleanup.
+      // Allow active workers to release their files and stop media processing.
       killTimer = setTimeout(() => { for (const child of children) child.kill('SIGKILL'); }, 15000);
       killTimer.unref();
     };
@@ -185,17 +180,6 @@ async function run() {
     const commands = [web.args];
     if (process.env.LOCAL_LIBRARY_DIR && process.env.BACKGROUND_DOWNLOADS_ENABLED !== '0') commands.push([path.join(root, 'scripts/background-worker.cjs')]);
     if (process.env.LIBRARY_SERVER_URL) commands.push([path.join(root, 'scripts/library-sync-worker.cjs')]);
-    if (process.env.LIBVIO_BROWSER_SOCKET && fs.existsSync(path.join(root, 'scripts/libvio-browser/node_modules/playwright-core/package.json'))) {
-      const environment = { ...process.env, NODE_ENV: 'production' };
-      delete environment.LIBRETV_LOCAL_AUTH_BIND;
-      stopBrowser = superviseBrowser({
-        spawn, executable: process.execPath, args: [path.join(root, 'scripts/libvio-browser/service.cjs')],
-        options: { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: environment },
-        onSpawn: (child) => children.push(child),
-        onExit: (child) => { const index = children.indexOf(child); if (index >= 0) children.splice(index, 1); },
-        log: console.error,
-      });
-    }
     // The login service owns every child. A failed worker restarts the group,
     // keeping a healthy web page from hiding a stopped background queue.
     await Promise.all(commands.map((args) => new Promise((resolve) => {
@@ -206,7 +190,7 @@ async function run() {
       const child = spawn(process.execPath, args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env });
       children.push(child);
       child.once('error', (error) => {
-        console.error(`[LibreTV] 后台进程无法启动：${error.message}`);
+        console.error(`[光影] 后台进程无法启动：${error.message}`);
         process.exitCode = 1;
         terminate();
         resolve();
@@ -216,8 +200,6 @@ async function run() {
         resolve();
       });
     })));
-    // Keep the group's SIGKILL deadline alive until the optional child exits too.
-    await browserStopped;
   } finally { cleanup(); }
 }
 
@@ -265,4 +247,4 @@ async function main() {
   }
 }
 
-main().catch((error) => { console.error(`[LibreTV] ${error.message}`); process.exitCode = 1; });
+main().catch((error) => { console.error(`[光影] ${error.message}`); process.exitCode = 1; });

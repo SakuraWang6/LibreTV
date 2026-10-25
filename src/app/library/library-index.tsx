@@ -72,7 +72,7 @@ export default function LibraryIndex() {
   const metadataSources = useMemo(() => {
     const seen = new Set<string>();
     return selectedKeys.map((key) => resolveSource({ envSources, customAPIs }, key)).filter((source): source is SourceConfig => {
-      if (!source || source.isAdult || source.kind === 'libvio' || seen.has(source.url)
+      if (!source || source.isAdult || seen.has(source.url)
         || isSourceDisabled({ sourceHealth }, source.key) || isInDisabledSubscription({ subscriptions }, source.key)) return false;
       seen.add(source.url); return true;
     });

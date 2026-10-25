@@ -1,8 +1,8 @@
-# LibreTV
+# 光影
 
-基于 [LibreSpark/LibreTV](https://github.com/LibreSpark/LibreTV) 的个人维护分支，提供影视搜索、独立播放页、磁盘片库和后台下载，并支持服务器主库与 Mac 按需离线副本。
+光影是基于 [LibreSpark/LibreTV](https://github.com/LibreSpark/LibreTV) 的个人维护分支，提供影视搜索、独立播放页、磁盘片库和后台下载，并支持服务器主库与 Mac 按需离线副本。
 
-技术栈为 Next.js、TypeScript、React、Tailwind CSS；播放器使用 ArtPlayer、hls.js 和 mpegts.js。本分支的片库、后台服务与浏览器接入需要按本文档从源码部署，上游镜像和发布包不代表已包含这些改动。
+技术栈为 Next.js、TypeScript、React、Tailwind CSS；播放器使用 ArtPlayer、hls.js 和 mpegts.js。本分支的片库与后台服务需要按本文档从源码部署，上游镜像和发布包不代表已包含这些改动。
 
 ## 文档
 
@@ -12,9 +12,7 @@
 | 服务器部署、HTTPS、跨设备观看与 iPhone 离线 | [服务器与同步](docs/server.md) |
 | 环境文件、配置项与存储位置 | [配置参考](docs/configuration.md) |
 | 点播、直播、源列表订阅与兼容格式 | [数据源](docs/sources.md) |
-| 夸克授权、下载流程与当前限制 | [夸克分享](docs/quark.md) |
 | 代码目录、后台进程、检查命令与清理边界 | [开发与维护](docs/development.md) |
-| LIBVIO 专用 Chrome 的服务协议 | [浏览器桥](scripts/libvio-browser/README.md) |
 
 ## 当前功能
 
@@ -24,7 +22,6 @@
 - **后台下载**：持久队列独立于网页运行，支持暂停、继续、取消和重试；下载、媒体整理与入库都成功后才加入片库。
 - **服务器与离线副本**：服务器保存主片库，Mac 只缓存选中的影片，并同步配对影片的观看进度。iPhone 联网时可直接访问服务器片库。
 - **直播与源管理**：M3U/IPTV、节目单、源测活及源列表订阅。片源由部署者或用户配置，仓库不提供可用片源清单。
-- **可选 Mac 接入**：LIBVIO 使用专用 Chrome 会话读取网页；夸克使用官方 CLI 授权并读取分享目录。两者的会话均保留在 Mac 本机。
 
 ## 开始使用
 
@@ -44,7 +41,7 @@ npm run build
 ./scripts/macos/start.command
 ```
 
-打开 **http://127.0.0.1:8899/library**，也可使用仓库中的 `LibreTV.app`。媒体目录索引需要经 Mac 启动器访问，并设置 `LOCAL_AUTH_BYPASS='true'`；登录自启、LIBVIO 与服务器同步按需配置，具体步骤见 [Mac 文档](docs/macos.md)。
+打开 **http://127.0.0.1:8899/library**，也可使用仓库中的 `LibreTV.app`（显示名「光影」）。媒体目录索引需要经 Mac 启动器访问，并设置 `LOCAL_AUTH_BYPASS='true'`；登录自启与服务器同步按需配置，具体步骤见 [Mac 文档](docs/macos.md)。
 
 ### 服务器
 
@@ -54,14 +51,13 @@ npm run build
 
 ## 使用边界
 
-- **夸克大文件尚未打通**：当前官方下载接口实测返回单文件 **50 MiB** 限制，尚未完成真实完整下载、暂停续传和自动入库验收。授权成功不代表普通电影已能下载，详见 [夸克当前限制](docs/quark.md)。
 - **续传取决于来源**：HLS 可以复用完整分片；普通 MP4 来源尚不支持 HTTP Range 字节续传。正常停止保留的任务与突然断电后的恢复能力不同。
 - **后台需要设备在线**：Mac 任务需要电脑开机、保持唤醒并联网；关闭网页可以继续，关机或睡眠不会继续。服务器任务由在线服务器处理，不会自动迁移到 Mac。
 - **进度有归属**：原搜索播放页 `/watch` 的历史保存在当前浏览器。跨设备同步适用于服务器片库及已配对的 Mac 离线副本；两端进度冲突时需选择保留哪一端。
 - **iPhone 离线使用完整文件**：可保存视频到“文件”或 VLC，但这些 App 的进度不会回传。当前未实现整站离线网页，也不保证退出 Safari 后继续下载。
 - **片源与编码会变化**：不能保证每条线路都可解析、全部资源达到指定清晰度或没有视频内广告；文件能下载也不代表其编码一定适合网页播放。
 
-受管理的视频、海报、片库记录、下载队列与播放进度保存在配置的库目录；目录索引的原片保留在所选硬盘。备份库目录须保留隐藏元数据，外部原片另行备份；索引不是视频副本。凭据与授权资料不要提交到 Git。当前未提供磁力、BT 或任意 HTTP 链接的夸克云端离线下载。
+受管理的视频、海报、片库记录、下载队列与播放进度保存在配置的库目录；目录索引的原片保留在所选硬盘。备份库目录须保留隐藏元数据，外部原片另行备份；索引不是视频副本。凭据与私有配置不要提交到 Git。当前未提供磁力或 BT 云端离线下载。
 
 ## 开发与来源
 
@@ -71,7 +67,6 @@ npm run build
 npm run lint
 npm run typecheck
 npm test
-node --test scripts/libvio-browser/readiness.test.cjs
 npm run build
 ```
 

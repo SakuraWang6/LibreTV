@@ -2,6 +2,7 @@
 
 import { Header } from '@/components/header';
 import { SiteFooter } from '@/components/site-footer';
+import { APP_NAME } from '@/lib/brand';
 
 export default function AboutPage() {
   return (
@@ -9,10 +10,9 @@ export default function AboutPage() {
       <Header />
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-10 space-y-8">
         <section>
-          <h1 className="text-xl font-bold text-content mb-3">关于 LibreTV</h1>
+          <h1 className="text-xl font-bold text-content mb-3">关于{APP_NAME}</h1>
           <p className="text-sm text-muted leading-relaxed">
-            LibreTV 是一个免费的在线视频搜索与观看平台。输入片名即可在多个点播源中聚合搜索，
-            无需注册、无内嵌广告、不存储任何视频文件。所有播放内容均来自第三方公开接口。
+            个人影视库与在线播放工具，基于 LibreTV 修改，按 AGPL-3.0 发布。
           </p>
         </section>
 
@@ -29,18 +29,18 @@ export default function AboutPage() {
         </section>
 
         <section>
-          <h2 className="text-base font-semibold text-content mb-2.5">隐私与数据</h2>
+          <h2 className="text-base font-semibold text-content mb-2.5">存储</h2>
           <p className="text-sm text-muted leading-relaxed">
-            你的搜索历史、观看进度等数据仅保存在本设备浏览器中（IndexedDB），不会上传到服务器。
-            聚合搜索请求由服务端代理转发，第三方数据源不会看到你的 IP 地址。
+            目录索引引用硬盘原片，海报、简介与片库进度保存在本机。
+            服务器片库与配对的 Mac 缓存同步进度；搜索播放历史保存在当前浏览器。
           </p>
         </section>
 
         <section>
-          <h2 className="text-base font-semibold text-content mb-2.5">免责声明</h2>
-          <p className="text-sm text-faint leading-relaxed">
-            本项目不存储、不制作任何视频内容，仅提供第三方公开接口的聚合与播放能力。
-            请尊重版权，所有内容的合法性由对应数据源负责。
+          <h2 className="text-base font-semibold text-content mb-2.5">源码</h2>
+          <p className="text-sm text-muted leading-relaxed flex gap-4">
+            <a className="hover:text-accent" href="https://github.com/SakuraWang6/LibreTV" target="_blank" rel="noopener noreferrer">{APP_NAME}</a>
+            <a className="hover:text-accent" href="https://github.com/LibreSpark/LibreTV" target="_blank" rel="noopener noreferrer">LibreTV 上游</a>
           </p>
         </section>
       </main>

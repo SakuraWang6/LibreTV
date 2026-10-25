@@ -1,23 +1,25 @@
 import type { MetadataRoute } from 'next';
+import { APP_NAME } from '@/lib/brand';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'LibreTV - 免费在线视频搜索与观看平台',
-    short_name: 'LibreTV',
-    description: '免费在线视频搜索与观看平台',
-    start_url: '/',
+    id: '/',
+    name: APP_NAME,
+    short_name: APP_NAME,
+    description: '影视库、在线播放与收藏。',
+    start_url: '/library',
     display: 'standalone',
-    background_color: '#111111',
-    theme_color: '#0b101a',
+    background_color: '#f5f5f7',
+    theme_color: '#f5f5f7',
     icons: [
       {
-        src: '/icons/icon-192.png',
+        src: '/icons/icon-192.png?v=guangying',
         sizes: '192x192',
         type: 'image/png',
         purpose: 'any',
       },
       {
-        src: '/icons/icon-512.png',
+        src: '/icons/icon-512.png?v=guangying',
         sizes: '512x512',
         type: 'image/png',
         purpose: 'any',

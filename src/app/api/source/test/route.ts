@@ -3,6 +3,7 @@ import { guardRequest } from '@/lib/api-guard';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import { fetchUpstream } from '@/lib/fetch-utils';
 import { parseSearchList } from '@/lib/cms-parser';
+import { isSupportedSource } from '@/lib/source-config';
 
 export const runtime = 'nodejs';
 
@@ -12,13 +13,15 @@ export async function POST(req: Request) {
   if (guarded) return guarded;
 
   let url = '';
+  let source: unknown;
   try {
-    const body = (await req.json()) as { url?: string };
+    const body = (await req.json()) as { url?: string; kind?: unknown; sourceKind?: unknown };
     url = (body.url || '').trim().replace(/\/+$/, '');
+    source = { ...body, key: 'test', name: 'test', url };
   } catch {
     return NextResponse.json({ error: '请求格式错误' }, { status: 400 });
   }
-  if (!/^https?:\/\//.test(url)) {
+  if (!isSupportedSource(source)) {
     return NextResponse.json({ error: '无效的源地址' }, { status: 400 });
   }
 

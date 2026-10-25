@@ -137,9 +137,9 @@ describe('local library metadata identity matching', () => {
     expect(mocks.search).not.toHaveBeenCalled();
   });
 
-  it('does not open LIBVIO or enable adult or unselected sources for metadata', async () => {
+  it('does not open retired providers or enable adult or unselected sources for metadata', async () => {
     const providers: SourceConfig[] = [
-      { key: 'libvio', name: 'LIBVIO', kind: 'libvio', url: 'https://libvio.host' },
+      { ...source, key: 'old-provider', ...{ kind: 'libvio' } },
       { key: 'implicit-libvio', name: 'LIBVIO地址', url: 'https://libvio.host' },
       { ...source, isAdult: true },
     ];

@@ -1,5 +1,5 @@
 import type { SourceConfig } from './types';
-import { isLibvioSource } from './providers/libvio/source';
+import { isSupportedSource } from './source-config';
 
 /**
  * 部署者通过 DEFAULT_SOURCES 环境变量预置的采集站。
@@ -12,25 +12,25 @@ export function getEnvSources(): SourceConfig[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error('必须是 JSON 数组');
-    const list: SourceConfig[] = parsed.map((item, i) => {
+    const list: SourceConfig[] = parsed.flatMap((item, i) => {
       if (typeof item !== 'object' || item === null) {
         throw new Error(`第 ${i + 1} 项不是对象`);
       }
-      const { name, url, detail, isAdult, kind } = item as Record<string, unknown>;
+      const { name, url, detail, isAdult, kind, sourceKind } = item as Record<string, unknown>;
       if (typeof name !== 'string' || !name.trim()) {
         throw new Error(`第 ${i + 1} 项缺少 name`);
       }
       if (typeof url !== 'string' || !/^https?:\/\//.test(url.trim())) {
         throw new Error(`第 ${i + 1} 项的 url 必须以 http:// 或 https:// 开头`);
       }
-      return {
+      if (!isSupportedSource({ key: `env_${i}`, name, url, detail: typeof detail === 'string' ? detail : undefined, kind, sourceKind })) return [];
+      return [{
         key: `env_${i}`,
-        ...((kind === 'libvio' || isLibvioSource({ url })) ? { kind: 'libvio' as const } : kind === 'cms' ? { kind: 'cms' as const } : {}),
         name: name.trim(),
         url: url.trim().replace(/\/+$/, ''),
         detail: typeof detail === 'string' && detail.trim() ? detail.trim() : undefined,
         isAdult: isAdult === true,
-      };
+      }];
     });
     return list;
   } catch (err) {

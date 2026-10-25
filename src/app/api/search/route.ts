@@ -3,8 +3,7 @@ import { guardRequest } from '@/lib/api-guard';
 import { cmsRequestHeaders, filterAdultResults, filterExactTitleResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
-import { isLibvioSource } from '@/lib/providers/libvio/source';
-import { searchLibvio } from '@/lib/providers/libvio/server';
+import { isSupportedSource } from '@/lib/source-config';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -20,7 +19,7 @@ const SEARCH_CACHE_TTL = 60 * 1000;
 
 /** 缓存键：wd + 成人过滤 + 排序后的源地址集合（直接用完整字符串，避免哈希碰撞串缓存） */
 function searchCacheKey(wd: string, sources: SourceConfig[], filterAdult: boolean): string {
-  const urls = sources.map((s) => `${s.kind || 'cms'}:${s.url.replace(/\/+$/, '')}`).sort().join('|');
+  const urls = sources.map((s) => s.url.replace(/\/+$/, '')).sort().join('|');
   return `search:exact-v1:${wd}\n${filterAdult ? 1 : 0}\n${urls}`;
 }
 
@@ -59,7 +58,6 @@ function isTimeoutError(err: unknown): boolean {
  * 旧版在浏览器里打满 N 个请求（暴露用户 IP、无法缓存、超时失控），现全部上移。
  */
 async function searchSource(source: SourceConfig, wd: string): Promise<SourceSearchOutcome> {
-  if (isLibvioSource(source)) return searchLibvio(source, wd);
   const start = Date.now();
   const finish = (outcome: Omit<SourceSearchOutcome, 'ms'>): SourceSearchOutcome => ({
     ...outcome,
@@ -209,6 +207,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '请至少选择一个点播源' }, { status: 400 });
   }
   const sources = body.sources.slice(0, 50);
+  if (!sources.every(isSupportedSource)) {
+    return NextResponse.json({ error: '无效或已停用的点播源配置' }, { status: 400 });
+  }
   const filterAdult = body.filterAdult !== false;
 
   const cacheKey = searchCacheKey(wd, sources, filterAdult);

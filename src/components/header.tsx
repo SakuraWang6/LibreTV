@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
@@ -13,6 +14,7 @@ import { SearchHistoryDropdown, useSearchHistory } from './search-history';
 import { cn } from '@/lib/utils';
 import { fetchLibrarySync } from '@/lib/library-sync-client';
 import { useAuth } from './auth';
+import { APP_NAME } from '@/lib/brand';
 
 interface LibraryNavigation {
   filter: 'all' | 'movie' | 'tv';
@@ -41,7 +43,7 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
   const hasServer = verified && (libraryNavigation?.hasServer ?? serverCapability.data?.enabled ?? false);
   const inLibrary = pathname === '/library';
   const inLibraryPlayer = pathname.startsWith('/library/play/');
-  const title = inLibraryPlayer || pathname === '/watch' ? '播放' : inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
+  const title = inLibraryPlayer || pathname === '/watch' ? '播放' : inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : APP_NAME;
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -99,7 +101,7 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
   return <>
     {sidebarOpen && <button type="button" className="mac-sidebar-overlay" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
     <aside id="app-sidebar" className={cn('mac-sidebar', sidebarOpen && 'is-open')} aria-label="主导航" role={sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOpen || undefined}>
-      <Link href="/library" className="mac-brand" onClick={() => setSidebarOpen(false)}><span className="mac-brand-icon"><Icon name="film" /></span><strong>LibreTV</strong></Link>
+      <Link href="/library" className="mac-brand" onClick={() => setSidebarOpen(false)}><Image className="mac-brand-icon" src="/icons/mark.svg" width={32} height={32} alt="" priority /><strong>{APP_NAME}</strong></Link>
       <nav className="mac-sidebar-nav">
         <p className="mac-nav-label">浏览</p>
         <Link href="/" className={cn('mac-nav-item', pathname === '/' && 'is-active')} onClick={() => setSidebarOpen(false)}><Icon name="search" /><span>发现</span></Link>
@@ -113,7 +115,7 @@ export function Header({ showSearch = false, libraryNavigation }: { showSearch?:
         <p className="mac-nav-label">更多</p>
         <Link href="/live" className={cn('mac-nav-item', pathname === '/live' && 'is-active')} onClick={() => setSidebarOpen(false)}><Icon name="bolt" /><span>直播</span></Link>
       </nav>
-      <div className="mac-sidebar-bottom">{navButton('设置', 'gear', () => setSettingsOpen(true))}<Link href="/about" className="mac-about">关于 LibreTV</Link></div>
+      <div className="mac-sidebar-bottom">{navButton('设置', 'gear', () => setSettingsOpen(true))}<Link href="/about" className="mac-about">关于{APP_NAME}</Link></div>
     </aside>
     <header className="mac-appbar">
       <div className="mac-toolbar-leading"><IconButton label="显示侧栏" onClick={() => setSidebarOpen(!sidebarOpen)} expanded={sidebarOpen} className="mac-sidebar-toggle"><Icon name="sidebar" /></IconButton><span className="mac-toolbar-title">{title}</span></div>

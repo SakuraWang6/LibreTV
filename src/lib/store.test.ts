@@ -8,12 +8,33 @@ vi.mock('./db', () => ({
   saveLiveProbeResults: vi.fn(async () => {}),
 }));
 
-import { isInDisabledSubscription, isSourceDisabled, keyBelongsToSubscription, SOURCE_DISABLE_LADDER, subKeyPrefix, useAppStore } from './store';
+import { isInDisabledSubscription, isSourceDisabled, keyBelongsToSubscription, resolveSource, SOURCE_DISABLE_LADDER, subKeyPrefix, useAppStore } from './store';
 import type { SourceConfig } from './types';
 
 const store = () => useAppStore.getState();
 
 const list = (urls: string[]): Omit<SourceConfig, 'key'>[] => urls.map((url) => ({ name: url, url }));
+
+describe('retired source settings compatibility', () => {
+  const cms = { key: 'cms', name: 'CMS', url: 'https://api.example.com/vod' };
+  const retired = { key: 'old', name: 'Old provider', url: cms.url, kind: 'libvio' };
+
+  it('migrates source settings without resetting unrelated preferences or namespace', async () => {
+    const options = useAppStore.persist.getOptions();
+    const migrated = await options.migrate!({ customAPIs: [retired, cms], selectedKeys: ['old', 'cms', 'env_1'], volume: 0.4 }, 9);
+    expect(migrated).toMatchObject({ customAPIs: [cms], selectedKeys: ['cms', 'env_1'], volume: 0.4 });
+    expect(options.name).toBe('libretv-settings');
+  });
+
+  it('rejects old source markers and retired URLs even when a key resolves to a CMS source', () => {
+    const sources = { customAPIs: [cms, retired], envSources: [] };
+    expect(resolveSource(sources, cms.key)).toEqual(cms);
+    expect(resolveSource(sources, retired.key)).toBeUndefined();
+    expect(resolveSource(sources, cms.key, { sourceKind: 'libvio' })).toBeUndefined();
+    expect(resolveSource(sources, 'missing', { url: 'https://libvio.host' })).toBeUndefined();
+    expect(resolveSource(sources, 'missing', { url: cms.url, sourceKind: 'cms' })).toMatchObject({ url: cms.url });
+  });
+});
 
 describe('width-aware quality cache migration', () => {
   it('clears old quality snapshots once and preserves source and playback preferences', async () => {

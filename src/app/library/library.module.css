@@ -21,7 +21,8 @@
 .playerLayout { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(210px, 1fr); gap: 25px; align-items: start; }
 .playerMain, .playerDetails { min-width: 0; }
 .videoFrame { aspect-ratio: 16 / 9; position: relative; background: #000; border-radius: 9px; overflow: hidden; }
-.video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.video { display: block; width: 100%; height: 100%; object-fit: contain; outline: none; }
+.video:focus, .video:focus-visible { outline: none; box-shadow: none; }
 .videoMessage { position: absolute; inset: 0; background: #19191c; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 17px; padding: 22px; color: #d2d2dc; }
 .videoMessage > p { font-size: 12px; text-align: center; line-height: 1.7; max-width: 330px; }
 .videoMessage > svg { width: 30px; height: 30px; }

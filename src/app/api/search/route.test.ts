@@ -62,6 +62,16 @@ afterEach(() => {
 });
 
 describe('POST /api/search', () => {
+  it.each([
+    { ...SOURCES[0], kind: 'libvio' }, { ...SOURCES[0], sourceKind: 'libvio' },
+    { ...SOURCES[0], url: 'https://libvio.host' },
+  ])('rejects retired sources before upstream requests or cached CMS results', async (source) => {
+    const upstream = vi.fn();
+    vi.stubGlobal('fetch', upstream);
+    const response = await POST(makeRequest({ wd: '测试剧', sources: [source] }));
+    expect(response.status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+  });
   it('聚合多源结果：同源去重、成人内容过滤、失败源进 failures', async () => {
     mockUpstream();
     const res = await POST(makeRequest({ wd: '测试剧', sources: SOURCES, filterAdult: true }));

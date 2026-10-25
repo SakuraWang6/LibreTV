@@ -1,41 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const controls = vi.hoisted(() => ({ blocked: false, detail: vi.fn() }));
+const controls = vi.hoisted(() => ({ blocked: false, fetch: vi.fn() }));
 vi.mock('@/lib/api-guard', () => ({ guardRequest: () => controls.blocked ? new Response('{}', { status: 401 }) : null }));
-vi.mock('@/lib/providers/libvio/server', () => ({ getLibvioDetail: controls.detail }));
+vi.mock('@/lib/fetch-utils', () => ({ fetchUpstream: controls.fetch, getCache: () => undefined, setCache: vi.fn() }));
+vi.mock('@/lib/ssrf', () => ({ checkUpstreamAllowed: async () => ({ ok: true }) }));
 import { GET } from './route';
 
-function request(fields: Record<string, string> = {}, tail = '') {
-  const query = new URLSearchParams({ id: '123', source: JSON.stringify({ key: 'libvio', name: 'LIBVIO', url: 'https://libvio.host', kind: 'libvio' }), ...fields });
-  return new Request('http://localhost/api/detail?' + query.toString() + tail);
+const source = { key: 'cms', name: 'CMS', url: 'https://api.example.test/vod' };
+function request(config: unknown = source) {
+  const query = new URLSearchParams({ id: '123', source: JSON.stringify(config) });
+  return new Request('http://localhost/api/detail?' + query.toString());
 }
 beforeEach(() => {
   controls.blocked = false;
-  controls.detail.mockReset().mockResolvedValue({ episodes: ['', 'https://cdn.example.test/2.mp4'], episodeLabels: ['第1集', '第2集'], playbackType: 'media', mediaContext: 'libvio', videoInfo: { title: '剧集' } });
+  controls.fetch.mockReset().mockImplementation(async () => new Response(JSON.stringify({ list: [{
+    vod_id: 123, vod_name: '剧集', vod_play_url: '第1集$https://cdn.example.test/1.m3u8#第2集$https://cdn.example.test/2.m3u8',
+  }] })));
 });
 
-describe('LIBVIO selected episode detail API', () => {
-  it('passes bounded selection fields separately without changing the AbortSignal position', async () => {
-    expect((await GET(request({ index: '1', episodeNumber: '2', seasonNumber: '1' }))).status).toBe(200);
-    expect(controls.detail).toHaveBeenCalledWith(expect.objectContaining({ kind: 'libvio' }), '123', expect.any(AbortSignal), { index: 1, episodeNumber: 2, seasonNumber: 1 });
+describe('CMS detail API', () => {
+  it('returns the ordinary full playlist from a CMS API', async () => {
     const response = await GET(request());
     expect(response.status).toBe(200);
-    expect(controls.detail.mock.calls[1][3]).toEqual({});
+    expect(await response.json()).toMatchObject({ episodes: ['https://cdn.example.test/1.m3u8', 'https://cdn.example.test/2.m3u8'], videoInfo: { title: '剧集' } });
+    expect(controls.fetch).toHaveBeenCalledWith('https://api.example.test/vod?ac=videolist&ids=123', expect.any(Object));
   });
-  it('rejects malformed, negative, fractional, duplicate and out-of-range selections before provider access', async () => {
-    const invalid: Record<string, string>[] = [
-      { index: '-1' }, { index: '100' }, { index: '' }, { index: '1.5' }, { index: '1e1' },
-      { episodeNumber: '0' }, { episodeNumber: '10000' }, { seasonNumber: '1' },
-      { episodeNumber: '2', seasonNumber: '0' }, { episodeNumber: '2', seasonNumber: '10000' },
-    ];
-    for (const fields of invalid) expect((await GET(request(fields))).status).toBe(400);
-    expect((await GET(request({ index: '1' }, '&index=2'))).status).toBe(400);
-    expect((await GET(request({ id: 'not-a-numeric-libvio-id' }))).status).toBe(400);
-    expect(controls.detail).not.toHaveBeenCalled();
+  it.each([
+    { ...source, kind: 'libvio' }, { ...source, sourceKind: 'libvio' },
+    { ...source, url: 'https://libvio.host' }, { ...source, url: 'https://www.libvio.app' },
+    { ...source, detail: 'https://libvio.to' }, null,
+  ])('rejects retired or invalid sources before upstream access', async (config) => {
+    expect((await GET(request(config))).status).toBe(400);
+    expect(controls.fetch).not.toHaveBeenCalled();
   });
-  it('keeps authentication ahead of source and selection parsing', async () => {
+  it('keeps authentication ahead of source parsing', async () => {
     controls.blocked = true;
-    expect((await GET(request({ index: '-1' }))).status).toBe(401);
-    expect(controls.detail).not.toHaveBeenCalled();
+    expect((await GET(request({ ...source, kind: 'libvio' }))).status).toBe(401);
+    expect(controls.fetch).not.toHaveBeenCalled();
   });
 });

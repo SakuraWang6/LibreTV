@@ -1,25 +1,24 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from '@/components/providers';
+import { APP_NAME } from '@/lib/brand';
 
 export const metadata: Metadata = {
   title: {
-    default: 'LibreTV · 影视库',
-    template: '%s - LibreTV',
+    default: `${APP_NAME} · 影视库`,
+    template: `%s - ${APP_NAME}`,
   },
   description:
     '影视库、在线播放与离线收藏。',
   manifest: '/manifest.webmanifest',
-  // 图标与门户站（LibreTV-portal）同一套：同一张 artwork 导出的多尺寸 + 根目录 favicon.ico 兜底。
-  // 只声明单张 512 时，抓取端只能拿大图缩放，小尺寸下易糊、看起来「没填满」。
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: '48x48' },
-      { url: '/icons/icon-96.png', sizes: '96x96', type: 'image/png' },
-      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-      { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+      { url: '/favicon.ico?v=guangying', sizes: '48x48' },
+      { url: '/icons/mark.svg', sizes: 'any', type: 'image/svg+xml' },
+      { url: '/icons/icon-192.png?v=guangying', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-512.png?v=guangying', sizes: '512x512', type: 'image/png' },
     ],
-    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+    apple: [{ url: '/icons/apple-touch-icon.png?v=guangying', sizes: '180x180', type: 'image/png' }],
   },
 };
 

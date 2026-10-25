@@ -58,15 +58,12 @@ describe('safe source and episode matching', () => {
     expect(matchPlaybackEpisode(current, result, detail({ episodeLabels: undefined }))).toEqual({ index: 2 });
   });
 
-  it('uses explicit season metadata when multiple seasons share one catalogue', () => {
-    const all = detail({ videoInfo: { title: '庆余年', typeName: '国产剧', year: '2024', sourceKey: source.key, sourceName: source.name }, episodeSeasons: [1, 2, 2], episodeLabels: ['第3集', '第2集', '第3集'] });
-    expect(matchPlaybackEpisode(current, { ...result, name: '庆余年' }, all)).toEqual({ index: 2 });
-  });
-
   it('keeps web, cloud share and browser verification entries out of the media player', () => {
+    const oldExternal = { ...detail(), playbackType: 'external' };
+    const oldBrowser = { ...detail(), playbackType: 'browser-required' };
     expect(isPlayableEpisode('https://example.com/share/abc')).toBe(false);
-    expect(isPlayableEpisode('https://example.com/file.mp4', detail({ playbackType: 'external' }))).toBe(false);
-    expect(matchPlaybackEpisode(current, result, detail({ playbackType: 'browser-required', message: '需要在原网站验证' }))).toEqual({ reason: '需要在原网站验证' });
+    expect(isPlayableEpisode('https://example.com/file.mp4', oldExternal)).toBe(false);
+    expect(matchPlaybackEpisode(current, result, oldBrowser)).toEqual({ reason: '此来源已停用' });
     expect(isPlayableEpisode('https://example.com/file.mp4?token=abc')).toBe(true);
     expect(isNativeMediaUrl('https://example.com/file.mp4?token=abc')).toBe(true);
     expect(isNativeMediaUrl('https://example.com/file.m3u8')).toBe(false);
@@ -119,7 +116,7 @@ describe('safe source and episode matching', () => {
 
   it('recognizes native media through only the local proxy query or legacy path', () => {
     const media = 'https://cdn.example/film.mp4?token=a&x=1';
-    expect(isNativeMediaUrl(`/api/proxy?mediaContext=libvio&url=${encodeURIComponent(media)}`)).toBe(true);
+    expect(isNativeMediaUrl(`/api/proxy?mediaContext=libvio&url=${encodeURIComponent(media)}`)).toBe(false);
     expect(isNativeMediaUrl(`/api/proxy/${encodeURIComponent(media)}`)).toBe(true);
     expect(isNativeMediaUrl(`/api/proxy?url=${encodeURIComponent('https://cdn.example/film.m3u8')}`)).toBe(false);
     expect(isNativeMediaUrl(`https://external.example/api/proxy?url=${encodeURIComponent(media)}`)).toBe(false);
@@ -133,12 +130,12 @@ describe('safe source and episode matching', () => {
 
 describe('resume URL and disk progress association', () => {
   it('retains fractional seconds, the mapped episode and optional library identity', () => {
-    const selected = { source: { ...source, kind: 'libvio' as const }, result, detail: detail(), index: 2 };
+    const selected = { source, result, detail: detail(), index: 2 };
     const url = new URL(buildPlaybackSwitchUrl(selected, 7.625, entry().id), 'http://localhost');
     expect(url.searchParams.get('position')).toBe('7.625');
     expect(url.searchParams.get('index')).toBe('2');
     expect(url.searchParams.get('libraryId')).toBe(entry().id);
-    expect(url.searchParams.get('sourceKind')).toBe('libvio');
+    expect(url.searchParams.has('sourceKind')).toBe(false);
     expect(url.searchParams.get('url')).toBe('https://cdn.example/3.m3u8');
     expect(requestedResumePosition(url.searchParams.get('position'))).toBe(7.625);
     expect(requestedResumePosition('0')).toBe(0);

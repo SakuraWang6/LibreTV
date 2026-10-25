@@ -70,11 +70,12 @@ export function isMultipartMovie(detail?: VideoDetail): boolean {
 }
 
 export function isPlayableEpisode(url: string, detail?: VideoDetail): boolean {
-  if (detail?.playbackType && detail.playbackType !== 'media') return false;
+  // Old cached website responses must not silently become ordinary CMS media.
+  if (detail && ('mediaContext' in detail || 'playbackType' in detail || 'externalLinks' in detail)) return false;
   try {
     const parsed = new URL(url);
     if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return false;
-    return detail?.playbackType === 'media' || /\.(?:m3u8|mp4|m4v|webm|mov|mkv|ts)(?:$|[?#])/i.test(parsed.href);
+    return /\.(?:m3u8|mp4|m4v|webm|mov|mkv|ts)(?:$|[?#])/i.test(parsed.href);
   } catch { return false; }
 }
 
@@ -83,6 +84,7 @@ export function isNativeMediaUrl(url: string): boolean {
     const origin = typeof location === 'undefined' ? 'http://localhost' : location.origin;
     let parsed = new URL(url, origin);
     if (parsed.origin === origin) {
+      if (parsed.searchParams.has('mediaContext')) return false;
       let target: string | undefined;
       if (parsed.pathname === '/api/proxy' && parsed.searchParams.getAll('url').length === 1) target = parsed.searchParams.get('url') || undefined;
       else if (parsed.pathname.startsWith('/api/proxy/')) target = decodeURIComponent(parsed.pathname.slice('/api/proxy/'.length));
@@ -122,11 +124,10 @@ export function matchPlaybackEpisode(current: PlaybackIdentity, result: Pick<Sea
   const kind = playbackKind(detail.videoInfo.typeName || result.typeName, detail.episodes.length);
   const title = detail.videoInfo.title || result.name;
   const wantedSeason = titleSeason(current.title).season ?? current.seasonNumber ?? 1;
-  const season = titleSeason(title).season ?? (detail.episodeSeasons?.includes(wantedSeason) ? wantedSeason
-    : detail.episodeSeasons?.find((value) => Number.isInteger(value) && value > 0));
+  const season = titleSeason(title).season;
   const reason = identityMismatch(current, { title, kind, typeName: detail.videoInfo.typeName || result.typeName, year: detail.videoInfo.year || result.year, seasonNumber: season });
   if (reason) return { reason };
-  if (detail.playbackType && detail.playbackType !== 'media') return { reason: detail.message || '此来源不能在播放器中直接播放' };
+  if ('mediaContext' in detail || 'playbackType' in detail || 'externalLinks' in detail) return { reason: '此来源已停用' };
   if (current.multipartMovie || isNumberedCollectionTitle(current.title) || isMultipartMovie(detail)) {
     return { reason: '电影合集或分段版本需手动选择分部' };
   }
@@ -138,7 +139,7 @@ export function matchPlaybackEpisode(current: PlaybackIdentity, result: Pick<Sea
   const labels = detail.episodeLabels || [];
   const numbered = labels.map((label, index) => ({ index, number: episodeFromLabel(label) }));
   if (numbered.some((item) => item.number !== undefined)) {
-    const matches = numbered.filter((item) => item.number === episode && (detail.episodeSeasons?.[item.index] ?? season ?? 1) === wantedSeason);
+    const matches = numbered.filter((item) => item.number === episode && (season ?? 1) === wantedSeason);
     if (matches.length !== 1) return { reason: `未能准确匹配第 ${episode} 集` };
     return isPlayableEpisode(detail.episodes[matches[0].index] || '', detail) ? { index: matches[0].index } : { reason: '本集没有可直接播放的视频' };
   }
@@ -159,7 +160,7 @@ export function canLinkLibraryProgress(entry: LibraryEntry, current: PlaybackIde
   // Unknown category needs a positive, matching year rather than only a name.
   if (!playbackKind(typeName) && (!yearOf(entry.year) || yearOf(entry.year) !== yearOf(confirmed.year))) return false;
   if (entry.kind === 'tv' && (entry.episodeNumber ?? 1) !== (current.episodeNumber ?? 1)) return false;
-  return !detail.playbackType || detail.playbackType === 'media';
+  return !('mediaContext' in detail || 'playbackType' in detail || 'externalLinks' in detail);
 }
 
 export function requestedResumePosition(value: string | null): number | undefined {
@@ -179,7 +180,6 @@ export function buildPlaybackSwitchUrl(selection: PlaybackSelection, position: n
     sourceUrl: selection.source.url, detail: selection.source.detail });
   const params = new URLSearchParams(url.split('?')[1]);
   params.set('position', String(Number.isFinite(position) ? Math.max(0, position) : 0));
-  if (selection.source.kind) params.set('sourceKind', selection.source.kind);
   if (libraryId && /^[a-f0-9]{32}$/.test(libraryId)) params.set('libraryId', libraryId);
   return `/watch?${params.toString()}`;
 }

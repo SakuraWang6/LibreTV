@@ -3,6 +3,7 @@ import { guardRequest } from '@/lib/api-guard';
 import { getCache, setCache } from '@/lib/fetch-utils';
 import { withHostLimit } from '@/lib/host-gate';
 import { probeQuality } from '@/lib/quality-probe';
+import { isSupportedSource } from '@/lib/source-config';
 import type { QualityProbeItem, QualityProbeResult } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -36,9 +37,7 @@ interface CachedProbe {
 function isProbeItem(v: unknown): v is QualityProbeItem {
   if (!v || typeof v !== 'object') return false;
   const item = v as { source?: unknown; id?: unknown };
-  if (!item.source || typeof item.source !== 'object') return false;
-  const source = item.source as Record<string, unknown>;
-  if (typeof source.key !== 'string' || typeof source.url !== 'string') return false;
+  if (!isSupportedSource(item.source)) return false;
   return typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 64;
 }
 

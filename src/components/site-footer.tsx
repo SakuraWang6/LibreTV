@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth';
+import { APP_NAME } from '@/lib/brand';
 
 /** 上游仓库最新 tag（即最新版本号），用于页脚的更新检测 */
 const UPSTREAM_TAGS_API = 'https://api.github.com/repos/LibreSpark/LibreTV/tags?per_page=1';
@@ -73,10 +74,10 @@ function UpdateTip({ update }: { update: UpstreamUpdate | null }) {
     update === null
       ? null
       : update.status === 'newer'
-        ? `发现新版本 v${update.latest}`
+        ? `上游新版本 v${update.latest}`
         : update.status === 'latest'
-          ? '已是最新版本'
-          : '正在检测更新…';
+          ? '已包含当前上游版本'
+          : '正在检测上游更新…';
   if (!tip) return null;
   return (
     <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-line bg-chip px-2 py-1 text-faint shadow-sm group-hover:block">
@@ -93,12 +94,12 @@ export function SiteFooter() {
     <footer className="border-t border-line py-4">
       <p className="text-center text-xs text-faint">
         <a
-          href="https://github.com/LibreSpark/LibreTV"
+          href="https://github.com/SakuraWang6/LibreTV"
           target="_blank"
           rel="noopener noreferrer"
           className="group relative inline-block cursor-help hover:text-accent"
         >
-          LibreTV{version ? ` v${version}` : ''}
+          {APP_NAME}{version ? ` v${version}` : ''}
           {version && <UpdateTip update={upstreamUpdate} />}
         </a>
         {' · '}

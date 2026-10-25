@@ -142,24 +142,30 @@ function jobOptions(overrides: Partial<DownloadJobOptions> = {}): DownloadJobOpt
 }
 
 describe('runDownloadJob · 源站缺片与存储错误', () => {
+  it('refuses stale provider context instead of silently downloading it as ordinary HLS', async () => {
+    const request = vi.fn();
+    vi.stubGlobal('fetch', request);
+    await expect(runDownloadJob({ ...jobOptions(), mediaContext: 'libvio' } as DownloadJobOptions)).rejects.toThrow('来源已停用');
+    expect(request).not.toHaveBeenCalled();
+  });
   it('rejects whole video files before the HLS parser can read their full body into memory', async () => {
     const request = vi.fn();
     vi.stubGlobal('fetch', request);
-    await expect(runDownloadJob(jobOptions({ url: 'https://cdn.example.com/movie.mp4', mediaContext: 'libvio' }))).rejects.toThrow('后台下载');
+    await expect(runDownloadJob(jobOptions({ url: 'https://cdn.example.com/movie.mp4' }))).rejects.toThrow('后台下载');
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('preserves a public media context through browser-download proxy requests', async () => {
+  it('keeps playlist segments behind the ordinary browser-download proxy', async () => {
     vi.stubGlobal('caches', undefined);
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input); calls.push(url);
-      if (url.includes('index.m3u8')) return new Response('#EXTM3U\n#EXTINF:3,\n/api/proxy?mediaContext=libvio&url=https%3A%2F%2Fcdn.example.com%2Fseg.ts\n#EXT-X-ENDLIST');
+      if (url.includes('index.m3u8')) return new Response('#EXTM3U\n#EXTINF:3,\n/api/proxy?url=https%3A%2F%2Fcdn.example.com%2Fseg.ts\n#EXT-X-ENDLIST');
       return new Response(new Uint8Array([0x47]));
     }));
-    await runDownloadJob(jobOptions({ mediaContext: 'libvio', proxy: false }));
-    expect(calls[0]).toBe('/api/proxy?mediaContext=libvio&url=https%3A%2F%2Fcdn.example.com%2Findex.m3u8');
-    expect(calls[1]).toContain('/api/proxy?mediaContext=libvio&url=');
+    await runDownloadJob(jobOptions({ proxy: true }));
+    expect(calls[0]).toBe('/api/proxy?url=https%3A%2F%2Fcdn.example.com%2Findex.m3u8');
+    expect(calls[1]).toContain('/api/proxy?url=');
   });
 
   it('分片 404 视为确定性缺失：不重试、立即失败并提示换源', async () => {

@@ -33,15 +33,15 @@ function mockSocketResponses(open: (incoming: PassThrough, index: number) => voi
   return calls;
 }
 
-describe('contextual download sockets and long-file idle deadlines', () => {
-  it('keeps only the fixed public Referer on checked redirect hops, with default TLS verification', async () => {
+describe('download sockets and long-file idle deadlines', () => {
+  it('uses media requests without source-specific headers on checked redirect hops and verifies TLS', async () => {
     const calls = mockSocketResponses((incoming, index) => { if (index === 1) incoming.end('movie'); }, [302, 200]);
-    const { res, finalUrl } = await fetchDownloadResource('https://first.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 1000, mediaContext: 'libvio' });
+    const { res, finalUrl } = await fetchDownloadResource('https://first.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 1000 });
     expect(await res.text()).toBe('movie');
     expect(finalUrl).toBe('https://final.example/movie.mp4');
     expect(calls.map((call) => call.url)).toEqual(['https://first.example/movie.mp4', 'https://final.example/movie.mp4']);
     for (const { options } of calls) {
-      expect(options.headers).toEqual({ Accept: '*/*', Referer: 'https://libvio.host/' });
+      expect(options.headers).toEqual({ Accept: '*/*' });
       expect(options.lookup).toBeTypeOf('function');
       expect(options.agent).toBe(false);
       expect(options.rejectUnauthorized).not.toBe(false);
@@ -61,7 +61,7 @@ describe('contextual download sockets and long-file idle deadlines', () => {
       for (let index = 1; index <= 7; index++) setTimeout(() => incoming.write('x'), index * 10);
       setTimeout(() => incoming.end(), 80);
     });
-    const pending = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 20, idleTimeoutMs: 25, mediaContext: 'libvio' });
+    const pending = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 20, idleTimeoutMs: 25 });
     await vi.advanceTimersByTimeAsync(0);
     const { res } = await pending;
     const body = res.text();
@@ -74,14 +74,14 @@ describe('contextual download sockets and long-file idle deadlines', () => {
   it('aborts a genuinely idle body and still responds immediately to worker cancellation', async () => {
     vi.useFakeTimers();
     mockSocketResponses((incoming) => incoming.write('start'));
-    const first = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 20, idleTimeoutMs: 30, mediaContext: 'libvio' });
+    const first = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: new AbortController().signal, timeoutMs: 20, idleTimeoutMs: 30 });
     await vi.advanceTimersByTimeAsync(0);
     const idle = (await first).res.text();
     const idleFailure = expect(idle).rejects.toThrow('没有返回数据');
     await vi.advanceTimersByTimeAsync(31);
     await idleFailure;
     const controller = new AbortController();
-    const second = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: controller.signal, timeoutMs: 20, idleTimeoutMs: 30, mediaContext: 'libvio' });
+    const second = fetchDownloadResource('https://cdn.example/movie.mp4', { signal: controller.signal, timeoutMs: 20, idleTimeoutMs: 30 });
     await vi.advanceTimersByTimeAsync(0);
     const cancelled = (await second).res.text();
     const cancellation = expect(cancelled).rejects.toThrow('worker stopped');

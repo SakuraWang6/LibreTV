@@ -4,7 +4,6 @@ import type { SourceConfig } from './types';
 import type { LiveProbeEntry } from './store';
 import { PERSIST_KEY, flushPendingPersist } from './persist-storage';
 import type { LibraryMetadata } from './local-library/types';
-import type { MediaContext } from './media-context';
 
 /**
  * IndexedDB 持久化（替代旧版 localStorage 数据库）：
@@ -61,7 +60,6 @@ export interface DownloadTaskEntry {
   id: string;
   /** 播放页 m3u8 地址（直连或代理形式，入队时的原样） */
   url: string;
-  mediaContext?: MediaContext;
   title: string;
   /** 输出格式 */
   format: 'TS' | 'MP4';

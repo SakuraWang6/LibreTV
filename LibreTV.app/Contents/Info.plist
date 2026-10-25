@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>LibreTV</string>
+	<string>光影</string>
 	<key>CFBundleExecutable</key>
 	<string>LibreTV</string>
 	<key>CFBundleIconFile</key>
@@ -11,7 +11,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>local.libretv.launcher</string>
 	<key>CFBundleName</key>
-	<string>LibreTV</string>
+	<string>光影</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

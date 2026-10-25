@@ -9,8 +9,7 @@ import { cmsRequestHeaders, parseDetail, parseDetailPageHtml } from './cms-parse
 import { fetchUpstream } from './fetch-utils';
 import { inferHeightFromBitrate, qualityRank } from './quality';
 import { checkUpstreamAllowed } from './ssrf';
-import { isLibvioSource } from './providers/libvio/source';
-import { getLibvioDetail } from './providers/libvio/server';
+import { isSupportedSource } from './source-config';
 import type { QualityProbeItem, QualityProbeResult, SourceConfig } from './types';
 
 /**
@@ -284,11 +283,6 @@ async function probeSegmentResolution(
 
 /** 取影片的播放地址列表（与 /api/detail 同逻辑：列表接口优先，拿不到再爬详情页） */
 async function fetchEpisodes(source: SourceConfig, id: string, signal: AbortSignal): Promise<string[]> {
-  if (isLibvioSource(source)) {
-    const detail = await getLibvioDetail(source, id, signal);
-    if (detail.playbackType !== 'media') throw new Error(detail.message || '请在 LIBVIO 原网页打开');
-    return detail.episodes;
-  }
   const api = `${source.url.replace(/\/+$/, '')}?ac=videolist&ids=${encodeURIComponent(id)}`;
   const res = await fetchUpstream(api, { timeoutMs: 6000, headers: cmsRequestHeaders(), signal });
   if (res.ok) {
@@ -370,7 +364,7 @@ export async function probeQuality(item: QualityProbeItem, signal?: AbortSignal)
   const { source, id } = item;
   const base: QualityProbeResult = { sourceKey: source.key, vodId: id };
 
-  if (!/^https?:\/\//.test(source.url || '') || !/^[\w-]+$/.test(id)) {
+  if (!isSupportedSource(source) || !/^[\w-]+$/.test(id)) {
     return { ...base, error: '无效的源或影片 ID' };
   }
   const verdict = await checkUpstreamAllowed(source.url);

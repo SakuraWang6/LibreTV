@@ -7,7 +7,6 @@ import { createUpload, appendUpload, completeUpload, cancelUpload, getLibraryEnt
 import { createMediaPlan, downloadResource, remuxLocal, maxJobBytes, requireFreeSpace, type MediaPlan } from './media';
 import { allStoredTasks, atomicJson, downloadsRoot, mutateTask, readTask, type StoredTask } from './store';
 import { downloadFailureMessage } from './error-message';
-import { cleanupQuarkDownload, downloadQuarkMedia } from '@/lib/quark/download';
 
 interface WorkTask extends StoredTask { uploadReady?: boolean }
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -40,12 +39,8 @@ async function cleanupUpload(task: WorkTask): Promise<void> {
   await mutateTask(task.id, (entry) => { delete entry.uploadId; delete (entry as WorkTask).uploadReady; });
 }
 
-async function cleanupCancelled(task: WorkTask): Promise<boolean> {
+async function cleanupCancelled(task: WorkTask): Promise<void> {
   const directory = path.join(await downloadsRoot(), 'work', task.id);
-  if (task.quark) {
-    try { await cleanupQuarkDownload(directory); }
-    catch { return false; } // The CLI may be busy; preserve ownership and retry later.
-  }
   await cleanupUpload(task);
   await fs.rm(directory, { recursive: true, force: true });
   await mutateTask(task.id, (entry) => {
@@ -53,7 +48,6 @@ async function cleanupCancelled(task: WorkTask): Promise<boolean> {
     if (entry.status !== 'cancelled' && !entry.cancelRequested) return;
     entry.status = 'cancelled'; entry.cancelRequested = false; entry.pauseRequested = false; entry.finished = 0; entry.bytes = 0; delete entry.error;
   });
-  return true;
 }
 
 async function loadPlan(directory: string, task: WorkTask, signal: AbortSignal): Promise<MediaPlan> {
@@ -73,7 +67,7 @@ async function loadPlan(directory: string, task: WorkTask, signal: AbortSignal):
     }
     return plan;
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const plan = await createMediaPlan(task.url, signal, task.mediaContext);
+  const plan = await createMediaPlan(task.url, signal);
   await atomicJson(file, plan);
   return plan;
 }
@@ -123,21 +117,14 @@ async function processActiveTask(id: string, signal: AbortSignal): Promise<void>
   // the already remuxed result also survive a worker restart.
   if (!task.uploadId) {
     await mutateTask(id, (entry) => { requireTaskActive(entry); entry.status = 'downloading'; delete entry.error; });
-    let plan: MediaPlan;
-    if (task.quark) {
-      plan = await downloadQuarkMedia(task.quark, directory, signal, async (bytes, total) => {
-        await mutateTask(id, (entry) => { requireTaskActive(entry); entry.finished = bytes; entry.total = total; entry.bytes = bytes; });
-      });
-    } else {
-      plan = await loadPlan(directory, task, signal);
-      await mutateTask(id, (entry) => { requireTaskActive(entry); entry.total = plan.resources.length; entry.finished = 0; entry.bytes = 0; });
-      let bytes = 0;
-      for (let index = 0; index < plan.resources.length; index++) {
-        await requireActive();
-        bytes += await downloadResource(plan.resources[index], directory, signal, bytes, task.mediaContext);
-        if (bytes > maxJobBytes()) throw new Error('该视频超过单个任务的空间限制');
-        await mutateTask(id, (entry) => { entry.finished = index + 1; entry.bytes = bytes; });
-      }
+    const plan = await loadPlan(directory, task, signal);
+    await mutateTask(id, (entry) => { requireTaskActive(entry); entry.total = plan.resources.length; entry.finished = 0; entry.bytes = 0; });
+    let bytes = 0;
+    for (let index = 0; index < plan.resources.length; index++) {
+      await requireActive();
+      bytes += await downloadResource(plan.resources[index], directory, signal, bytes);
+      if (bytes > maxJobBytes()) throw new Error('该视频超过单个任务的空间限制');
+      await mutateTask(id, (entry) => { entry.finished = index + 1; entry.bytes = bytes; });
     }
     await requireActive();
     await mutateTask(id, (entry) => { requireTaskActive(entry); entry.status = 'processing'; });
@@ -240,7 +227,7 @@ export async function runWorker(): Promise<void> {
     while (!stopping) {
       const tasks = await allStoredTasks();
       const cleanup = tasks.find((task) => task.status === 'cancelled' && task.cancelRequested);
-      if (cleanup) { if (!await cleanupCancelled(cleanup)) await pause(1500); continue; }
+      if (cleanup) { await cleanupCancelled(cleanup); continue; }
       const task = tasks.find((entry) => ['queued', 'downloading', 'processing'].includes(entry.status));
       if (!task) { await pause(1500); continue; }
       active = new AbortController();

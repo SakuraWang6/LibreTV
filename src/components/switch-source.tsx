@@ -54,10 +54,7 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
     return cached;
   }, [candidates, qualityMap]);
   useEffect(() => { prime(candidates.map((candidate) => candidate.result)); }, [candidates, prime]);
-  // Changing episodes re-resolves LIBVIO's selected slot without searching again.
   const identityKey = JSON.stringify({ title: identity.title, kind: identity.kind, typeName: identity.typeName, year: identity.year, seasonNumber: identity.seasonNumber });
-  const selectionKey = discovered.some((candidate) => candidate.source.kind === 'libvio')
-    ? JSON.stringify({ episodeNumber: identity.episodeNumber ?? 1, seasonNumber: identity.seasonNumber ?? titleSeason(identity.title).season ?? 1 }) : '';
   useEffect(() => { if (autoLoad) setEnabled(true); }, [autoLoad]);
 
   useEffect(() => {
@@ -91,18 +88,17 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
   useEffect(() => {
     if (!enabled || !discovered.length) return;
     const controller = new AbortController();
-    const selection = selectionKey ? JSON.parse(selectionKey) as { episodeNumber: number; seasonNumber: number } : undefined;
     setCandidates(discovered);
     setPhase('testing');
     void Promise.all(discovered.map(async (candidate) => {
       if (candidate.source.key === currentSourceKey && candidate.result.vodId === currentVodId) return;
       const started = performance.now();
       try {
-        const cached = candidate.source.kind !== 'libvio' ? fullDetails.current.get(candidate) : undefined;
-        const detail = cached?.detail ?? await api.detail(candidate.result.vodId, candidate.source, controller.signal, candidate.source.kind === 'libvio' ? selection : undefined);
+        const cached = fullDetails.current.get(candidate);
+        const detail = cached?.detail ?? await api.detail(candidate.result.vodId, candidate.source, controller.signal);
         const ms = cached?.ms ?? Math.round(performance.now() - started);
         if (!controller.signal.aborted) {
-          if (candidate.source.kind !== 'libvio') fullDetails.current.set(candidate, { detail, ms });
+          fullDetails.current.set(candidate, { detail, ms });
           setCandidates((previous) => previous.map((item) => item.source.key === candidate.source.key && item.result.vodId === candidate.result.vodId
             ? { ...item, detail, ms } : item));
         }
@@ -112,7 +108,7 @@ export function PlaybackSourcePicker({ identity, currentSourceKey = '', currentV
       }
     })).then(() => { if (!controller.signal.aborted) setPhase('done'); });
     return () => controller.abort();
-  }, [enabled, discovered, selectionKey, currentSourceKey, currentVodId]);
+  }, [enabled, discovered, currentSourceKey, currentVodId]);
 
   const sorted = candidates.map((candidate) => currentDetail && candidate.source.key === currentSourceKey && candidate.result.vodId === currentVodId
     ? { ...candidate, detail: currentDetail } : candidate).sort((a, b) => {

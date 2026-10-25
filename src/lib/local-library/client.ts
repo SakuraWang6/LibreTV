@@ -122,7 +122,7 @@ async function libraryRequest<T>(url: string, init?: RequestInit, retry = false)
       if (init?.signal?.aborted) throw new Error('已取消保存到本地影视库');
       lastError = error;
       if (attempt < 2 && retry) continue;
-      throw new Error('连接本地影视库失败，请确认 LibreTV 正在运行后重试');
+      throw new Error('连接本地影视库失败，请确认光影正在运行后重试');
     }
     if (!response.ok) {
       const payload = await response.json().catch(() => ({})) as { error?: string; message?: string };

@@ -1,5 +1,7 @@
 'use client';
 
+import { APP_NAME } from '@/lib/brand';
+
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
@@ -150,7 +152,7 @@ function HomeContent() {
 
   const openVideo = (item: SearchResultItem) => {
     const source = resolveSource({ customAPIs, envSources }, item.sourceKey, { url: item.sourceUrl, name: item.sourceName });
-    router.push(buildWatchUrl({ sourceKey: item.sourceKey, sourceKind: item.sourceKind || source?.kind, vodId: item.vodId, index: 0, title: item.name, sourceUrl: source?.url || item.sourceUrl, detail: source?.detail }));
+    router.push(buildWatchUrl({ sourceKey: item.sourceKey, vodId: item.vodId, index: 0, title: item.name, sourceUrl: source?.url || item.sourceUrl, detail: source?.detail }));
   };
 
   return (
@@ -163,7 +165,7 @@ function HomeContent() {
           {!urlQuery && (
             <h1>发现</h1>
           )}
-          {urlQuery && <h1 className="sr-only">LibreTV 视频搜索</h1>}
+          {urlQuery && <h1 className="sr-only">{APP_NAME}视频搜索</h1>}
           {/* 定位容器比胶囊宽一圈：浮层按它的宽度对齐，接缝处不会与胶囊边框错位 1px */}
           <div ref={searchHistory.containerRef} className="relative w-full max-w-2xl">
             <form

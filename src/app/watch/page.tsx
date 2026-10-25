@@ -25,7 +25,6 @@ import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks
 import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
 import { enqueueDownload } from '@/components/download-manager';
-import { buildMediaProxyUrl } from '@/lib/media-context';
 import { Icon } from '@/components/icon';
 import { useAuth } from '@/components/auth';
 import { resolveSource, useAppStore } from '@/lib/store';
@@ -40,8 +39,6 @@ import {
 } from '@/lib/db';
 import { cn } from '@/lib/utils';
 import { movieDownloadMetadata } from './download-metadata';
-import { QuarkShareDownloader } from '@/components/quark-share-downloader';
-import { isQuarkShareUrl } from '@/lib/quark-client';
 
 /**
  * 播放页（唯一入口，替代旧版 watch.html → player.html 跳转链）。
@@ -109,23 +106,20 @@ function WatchContent() {
     };
   }, [skipPanelOpen]);
 
-  const resolvedSource = resolveSource(store, sourceKey, {
+  const source = resolveSource(store, sourceKey, {
     url: searchParams.get('sourceUrl') || undefined,
     detail: searchParams.get('detail') || undefined,
+    sourceKind: searchParams.get('sourceKind') || undefined,
   });
-  const sourceKind = searchParams.get('sourceKind');
-  const source = resolvedSource && sourceKind === 'libvio' ? { ...resolvedSource, kind: 'libvio' as const } : resolvedSource;
-  const detailQueryKey = videoDetailQueryKey(source, vodId, indexParam);
+  const detailQueryKey = videoDetailQueryKey(source, vodId);
 
   // 详情查询：无 id（纯直连链接分享）时跳过
   const detailQuery = useQuery({
     queryKey: detailQueryKey,
-    queryFn: ({ signal }) => api.detail(vodId, source!, signal, source?.kind === 'libvio' ? { index: indexParam } : undefined),
+    queryFn: ({ signal }) => api.detail(vodId, source!, signal),
     enabled: Boolean(source && vodId && verified),
-    staleTime: (query) => source?.kind === 'libvio' && !isPlayableEpisode(query.state.data?.episodes[indexParam] || '', query.state.data) ? 0 : 5 * 60_000,
-    retry: source?.kind === 'libvio' ? false : 1,
-    refetchOnReconnect: source?.kind === 'libvio' ? false : undefined,
-    placeholderData: (previous, query) => source?.kind === 'libvio' && detailQueryKey.slice(0, 5).every((value, index) => value === query?.queryKey[index]) ? previous : undefined,
+    staleTime: 5 * 60_000,
+    retry: 1,
   });
 
   const episodes = useMemo(() => detailQuery.data?.episodes ?? [], [detailQuery.data]);
@@ -135,14 +129,14 @@ function WatchContent() {
 
   // 当前播放地址：优先取剧集列表中的当前集，其次直连 URL 参数
   const currentUrl = useMemo(() => {
-    if (source?.kind === 'libvio' && vodId && !detailQuery.data) return '';
+    if (!source) return '';
     if (episodes.length > 0) {
       const idx = Math.min(Math.max(indexParam, 0), episodes.length - 1);
-      const value = episodes[idx] || (source?.kind === 'libvio' ? '' : directUrl);
+      const value = episodes[idx] || directUrl;
       return isPlayableEpisode(value, detailQuery.data) ? value : '';
     }
-    return (!vodId || source?.kind !== 'libvio') && isPlayableEpisode(directUrl, detailQuery.data) ? directUrl : '';
-  }, [episodes, indexParam, directUrl, detailQuery.data, source?.kind, vodId]);
+    return isPlayableEpisode(directUrl, detailQuery.data) ? directUrl : '';
+  }, [source, episodes, indexParam, directUrl, detailQuery.data]);
 
   const currentIndex = useMemo(() => {
     if (episodes.length > 0) return Math.min(Math.max(indexParam, 0), episodes.length - 1);
@@ -155,7 +149,7 @@ function WatchContent() {
     title: videoTitle,
     kind: playbackKind(videoInfo?.typeName, episodes.length), typeName: videoInfo?.typeName,
     year: videoInfo?.year,
-    seasonNumber: detailQuery.data?.episodeSeasons?.[currentIndex] ?? titleSeason(videoTitle).season ?? 1,
+    seasonNumber: titleSeason(videoTitle).season ?? 1,
     episodeNumber: episodeFromLabel(detailQuery.data?.episodeLabels?.[currentIndex]) ?? currentIndex + 1,
     multipartMovie: isMultipartMovie(detailQuery.data),
   };
@@ -259,7 +253,7 @@ function WatchContent() {
     const position = playerApiRef.current?.getCurrentTime() ?? latestClock.current.position;
     const duration = playerApiRef.current?.getDuration() ?? latestClock.current.duration;
     handleProgress(position, duration);
-    queryClient.setQueryData(videoDetailQueryKey(selection.source, selection.result.vodId, match.index), selection.detail);
+    queryClient.setQueryData(videoDetailQueryKey(selection.source, selection.result.vodId), selection.detail);
     router.replace(buildPlaybackSwitchUrl({ ...selection, index: match.index }, position, linkedLibraryId), { scroll: false });
   };
 
@@ -368,7 +362,6 @@ function WatchContent() {
                 });
                 enqueueDownload({
                   url: currentUrl,
-                  mediaContext: detailQuery.data?.mediaContext,
                   title: `${downloadMetadata.title}${isSeries ? ` ${detailQuery.data?.episodeLabels?.[currentIndex] || `第${identity.episodeNumber}集`}` : ''}`,
                   format: 'MP4',
                   libraryMetadata: {
@@ -399,7 +392,7 @@ function WatchContent() {
               {currentUrl ? (
                 <PlayerShell
                   key={playbackKey}
-                  url={buildMediaProxyUrl(currentUrl, detailQuery.data?.mediaContext)}
+                  url={currentUrl}
                   title={videoTitle}
                   adFilter={store.adFilter}
                   autoplayNext={store.autoplayNext}
@@ -410,7 +403,7 @@ function WatchContent() {
                   onPlayerApi={(api) => { playerApiRef.current = api; }}
                   onRecordSegment={handleRecordSegment}
                   episodeKey={`${sourceKey}:${vodId}:${currentIndex}`}
-                  nextUrl={canPrefetchNext ? buildMediaProxyUrl(nextEpisodeUrl, detailQuery.data?.mediaContext) : undefined}
+                  nextUrl={canPrefetchNext ? nextEpisodeUrl : undefined}
                   nextEpisodeKey={canPrefetchNext ? `${sourceKey}:${vodId}:${currentIndex + 1}` : undefined}
                   getRestorePosition={getRestorePosition}
                   onTimeUpdate={handleProgress}
@@ -435,24 +428,14 @@ function WatchContent() {
                     <Spinner size="lg" />
                   ) : (
                     <div className="text-center px-6 max-w-md">
-                      <p className="text-faint text-sm">{detailQuery.data?.message || (detailQuery.isError ? '视频加载失败，可以在右侧选择其他播放源' : '此条目没有可直接播放的视频')}</p>
+                      <p className="text-faint text-sm">{detailQuery.isError ? '视频加载失败，可以在右侧选择其他播放源' : '此条目没有可直接播放的视频'}</p>
                       {source && vodId && <button type="button" className="btn-ghost btn-sm mt-3" disabled={detailQuery.isFetching} onClick={() => { void detailQuery.refetch(); }}>{detailQuery.isFetching ? '重试中…' : '重试'}</button>}
-                      {detailQuery.data?.pageUrl && /^https?:\/\//i.test(detailQuery.data.pageUrl) && <a className="btn-ghost btn-sm mt-3 inline-flex" href={detailQuery.data.pageUrl} target="_blank" rel="noopener noreferrer">在原网站打开</a>}
                     </div>
                   )}
                 </div>
               )}
             </div>
             {linkedSaveError && <p className="text-xs text-danger mt-2" role="status">本地进度保存失败</p>}
-            {detailQuery.data?.externalLinks && detailQuery.data.externalLinks.length > 0 && <div className="mt-3 flex flex-wrap gap-2">
-              {detailQuery.data.externalLinks.filter((link) => /^https?:\/\//i.test(link.url)).map((link) => isQuarkShareUrl(link.url)
-                ? <QuarkShareDownloader key={link.url} url={link.url} metadata={{
-                  title: videoInfo?.title || videoTitle, kind: isMultipartMovie(detailQuery.data) ? 'movie' : isSeries ? 'tv' : 'movie', year: videoInfo?.year,
-                  description: videoInfo?.desc, coverUrl: videoInfo?.cover, sourceName: videoInfo?.sourceName || source.name,
-                  ...(isSeries && !isMultipartMovie(detailQuery.data) ? { seasonNumber: identity.seasonNumber } : {}),
-                }} />
-                : <a key={link.url} className="btn-ghost btn-sm" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>)}
-            </div>}
 
             {/* 操作栏 */}
             <div className="flex flex-wrap items-center gap-2 mt-3">
