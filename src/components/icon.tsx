@@ -24,9 +24,19 @@ export type IconName =
   | 'link'
   | 'alert'
   | 'gear'
+  | 'film'
+  | 'tv'
+  | 'library'
+  | 'server'
+  | 'sidebar'
   | 'home';
 
 const PATHS: Record<IconName, ReactNode> = {
+  film: <><rect x="3" y="3" width="18" height="18" rx="3" /><path d="M7 3v18M17 3v18M3 8h4m-4 8h4M17 8h4m-4 8h4" /></>,
+  tv: <><rect x="3" y="7" width="18" height="14" rx="3" /><path d="m8 3 4 4 4-4M10 17l5-3-5-3z" /></>,
+  library: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
+  server: <><rect x="3" y="3" width="18" height="8" rx="2" /><rect x="3" y="13" width="18" height="8" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6" /></>,
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16M5.5 8h.01m-.01 4h.01m-.01 4h.01" /></>,
   close: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />,
   edit: (
     <path

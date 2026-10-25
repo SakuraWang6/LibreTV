@@ -20,6 +20,35 @@ export function isPasswordConfigured(): boolean {
   return getPassword().length > 0;
 }
 
+/**
+ * Only the Mac launcher may opt its loopback-bound web child into this mode.
+ * Request does not expose a trustworthy TCP peer address: Host/Origin are
+ * additional checks, while the launcher's 127.0.0.1 binding is the boundary.
+ * Never infer local access from X-Forwarded-* headers.
+ */
+export function isLocalAuthBypass(request: Request): boolean {
+  if (process.platform !== 'darwin' || process.env.LOCAL_AUTH_BYPASS !== 'true'
+    || process.env.LIBRETV_LOCAL_AUTH_BIND !== '127.0.0.1:8899'
+    || process.env.PUBLIC_ORIGIN?.trim() || !isPasswordConfigured()) return false;
+
+  try {
+    const url = new URL(request.url);
+    const aliases = new Set(['127.0.0.1', 'localhost']);
+    if (url.protocol !== 'http:' || url.port !== '8899' || !aliases.has(url.hostname)
+      || url.username || url.password) return false;
+    const host = request.headers.get('host')?.toLowerCase();
+    if (host !== '127.0.0.1:8899' && host !== 'localhost:8899') return false;
+    const site = request.headers.get('sec-fetch-site');
+    if (site && site !== 'same-origin' && site !== 'none') return false;
+    const origin = request.headers.get('origin');
+    return !origin || origin === `http://${host}`;
+  } catch { return false; }
+}
+
+export function isRequestAuthorized(request: Request): boolean {
+  return isLocalAuthBypass(request) || sessionFromCookieHeader(request.headers.get('cookie'));
+}
+
 function getSecret(): string {
   if (process.env.PROXY_SECRET) return process.env.PROXY_SECRET;
   return crypto.createHash('sha256').update(getPassword() + ':libretv::session-salt').digest('hex');
@@ -70,7 +99,8 @@ export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
     if (eq === -1) continue;
     const name = c.slice(0, eq).trim();
     if (name === SESSION_COOKIE) {
-      return verifySession(decodeURIComponent(c.slice(eq + 1).trim()));
+      try { return verifySession(decodeURIComponent(c.slice(eq + 1).trim())); }
+      catch { return false; }
     }
   }
   return false;

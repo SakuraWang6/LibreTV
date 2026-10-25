@@ -209,7 +209,7 @@ export function AggregatedCard({
                 />
               )}
             </div>
-            <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks || '暂无介绍'}</p>
+            {group.remarks && <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks}</p>}
           </div>
           <div className="flex items-center justify-between gap-1.5 mt-auto pt-1.5 border-t border-line">
             <span className="tag bg-chip text-muted truncate max-w-[80%]">
@@ -382,7 +382,7 @@ export function VideoCard({ item, onClick }: { item: SearchResultItem; onClick: 
               {item.typeName && <span className="tag bg-accent/15 text-accent">{item.typeName}</span>}
               {item.year && <span className="tag bg-purple-500/15 text-purple-600 dark:text-purple-300">{item.year}</span>}
             </div>
-            <p className="text-xs text-muted line-clamp-2 mb-2">{formatRemarks(item.remarks) || '暂无介绍'}</p>
+            {item.remarks && <p className="text-xs text-muted line-clamp-2 mb-2">{formatRemarks(item.remarks)}</p>}
           </div>
           <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-line">
             <span className="tag bg-chip text-muted truncate max-w-[80%]">{item.sourceName}</span>

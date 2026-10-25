@@ -28,6 +28,8 @@ DEFAULT_SOURCES='[{"name":"自己的片源","url":"https://example.com/api.php/p
 
 上述地址是格式示例，请换成自己有权使用的可用接口。配置会在每次启动时重新读取，修改后停止再启动即可。
 
+如希望这台 Mac 打开即用，在 `.env.macos.local` 中添加 `LOCAL_AUTH_BYPASS='true'`。重启后，通过本机启动器访问 `http://127.0.0.1:8899` 无需输入密码；仍保留 `PASSWORD` 配置。这个开关只由 Mac 启动器为固定监听 `127.0.0.1` 的网页服务启用，直接运行 `npm start` 或公网 Docker 不会因此免登录。请求的实际 Host 与 Origin 也必须是本机地址，不使用转发头判断本机身份。此本机服务不要通过公网反代或端口转发共享，不能同时设置 `PUBLIC_ORIGIN`；服务器继续使用独立部署和访问密码。
+
 ## 启动与停止
 
 在 Finder 中双击 `scripts/macos/start.command`，或在终端执行：
@@ -36,7 +38,7 @@ DEFAULT_SOURCES='[{"name":"自己的片源","url":"https://example.com/api.php/p
 ./scripts/macos/start.command
 ```
 
-启动脚本会等待 `/api/status` 健康检查通过，同时管理独立的后台下载进程；配置服务器同步后，也会启动同步进程。关闭浏览器、LibreTV 窗口或终端不会停止这些服务。重复启动会复用正在运行的实例。然后打开 http://127.0.0.1:8899，用配置的密码登录。
+启动脚本会等待 `/api/status` 健康检查通过，同时管理独立的后台下载进程；配置服务器同步后，也会启动同步进程。关闭浏览器、LibreTV 窗口或终端不会停止这些服务。重复启动会复用正在运行的实例。然后打开 http://127.0.0.1:8899；启用本机免登录后直接进入，否则用配置的密码登录。
 
 双击 `scripts/macos/stop.command` 或执行：
 

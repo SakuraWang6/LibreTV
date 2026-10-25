@@ -15,11 +15,11 @@ function episodeName(item: SyncCatalogItem): string {
 }
 
 function cacheLabel(item: SyncCatalogItem): string {
-  if (item.cachedLocalId) return '已保存到这台 Mac';
-  if (item.cacheTask?.status === 'queued') return '等待后台缓存';
+  if (item.cachedLocalId) return '已在本地';
+  if (item.cacheTask?.status === 'queued') return '排队中';
   if (item.cacheTask?.status === 'downloading') return `正在缓存 ${Math.min(100, Math.round(item.cacheTask.progress))}%`;
-  if (item.cacheTask?.status === 'error') return '缓存失败，可重试';
-  return '仅在服务器上';
+  if (item.cacheTask?.status === 'error') return '缓存失败';
+  return '服务器';
 }
 
 function ServerPoster({ item }: { item: SyncCatalogItem }) {
@@ -47,13 +47,12 @@ export function ProgressConflicts({ conflicts, online, onRefresh }: { conflicts:
     finally { setPending(null); }
   };
   return <section className={styles.syncConflicts} aria-label="选择观看进度">
-    <h2>两边都有新的观看进度</h2>
-    <p>选择接下来从哪里继续。确认后会同步到 Mac 和服务器。</p>
+    <h2>观看进度冲突</h2>
     {conflicts.map((conflict) => <div key={conflict.itemId} className={styles.syncConflictRow}>
       <strong>{conflict.title}</strong>
       <div><button className={styles.secondaryButton} disabled={!online || pending !== null} onClick={() => void resolve(conflict.itemId, 'local')}>使用 Mac 进度 · {clock(conflict.local.position)}</button><button className={styles.secondaryButton} disabled={!online || pending !== null} onClick={() => void resolve(conflict.itemId, 'server')}>使用服务器进度 · {clock(conflict.server.position)}</button></div>
     </div>)}
-    {!online && <p>连接服务器后即可选择并同步进度。</p>}
+    {!online && <p>服务器未连接</p>}
     {error && <p className={styles.progressError} role="alert">{error}</p>}
   </section>;
 }
@@ -88,21 +87,21 @@ export function ServerLibrary({ status, onRefresh, onPlay }: { status: SyncStatu
     const busy = pending.has(item.id) || item.cacheTask?.status === 'queued' || item.cacheTask?.status === 'downloading';
     return item.cachedLocalId
       ? <button className={styles.secondaryButton} onClick={() => onPlay(item.cachedLocalId!)}>本地播放</button>
-      : <button className={styles.secondaryButton} disabled={busy || !status.online} onClick={() => void cache(item)}>{busy ? '正在后台缓存…' : item.cacheTask?.status === 'error' ? '重新保存到这台 Mac' : '保存到这台 Mac'}</button>;
+      : <button className={styles.secondaryButton} disabled={busy || !status.online} onClick={() => void cache(item)}>{busy ? '缓存中…' : item.cacheTask?.status === 'error' ? '重试' : '保存到本地'}</button>;
   };
 
   return <section className={styles.serverLibrary} aria-label="服务器片库">
-    <div className={styles.syncDescription}><div><p>{status.online ? '服务器主片库' : '服务器离线 · 显示上次保存的片库目录'}</p><span>按需保存到这台 Mac，完成后断网也能在本地片库观看。缓存由后台服务处理，关闭窗口会继续。</span></div>{serverUrl && <a href={`${serverUrl}/library`} target="_blank" rel="noreferrer" className={styles.secondaryButton}>打开服务器片库</a>}</div>
+    <div className={styles.syncDescription}><div><p>{status.online ? '已连接' : '离线目录'}</p></div>{serverUrl && <a href={`${serverUrl}/library`} target="_blank" rel="noreferrer" className={styles.secondaryButton}>在线打开</a>}</div>
     {(error || status.error) && <div className={styles.errorBanner} role="status">{error || status.error}<button onClick={() => void onRefresh()}>重新连接</button></div>}
     <div className={styles.collectionHeader}>
       <div className={styles.tabs} role="group" aria-label="服务器影视分类">{([{ key: 'all', label: '全部' }, { key: 'movie', label: '电影' }, { key: 'tv', label: '电视剧' }] as const).map(({ key, label }) => <button key={key} className={filter === key ? styles.activeTab : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}<span>{collections.filter(({ items }) => key === 'all' || items[0].kind === key).length}</span></button>)}</div>
-      <label className={styles.searchBox}><input type="search" aria-label="搜索服务器片名" placeholder="搜索服务器片名" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+      <label className={styles.searchBox}><input type="search" aria-label="搜索服务器片名" placeholder="搜索影片" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
     </div>
     {selected && <div className={styles.serverEpisodes}>
       <div className={styles.sectionHeading}><h2>{selected.items[0].title}</h2><button className={styles.textButton} onClick={() => setSelectedGroup(null)}>收起选集</button></div>
       {selected.items.map((item) => <div key={item.id} className={styles.serverEpisodeRow}><div><strong>{episodeName(item)}</strong><span>{cacheLabel(item)}</span>{item.cacheTask?.status === 'error' && item.cacheTask.error && <small>{item.cacheTask.error}</small>}</div>{actions(item)}</div>)}
     </div>}
-    {shown.length === 0 ? <div className={styles.statePanel}><h2>{query ? '没有找到这部影片' : status.catalog.length ? '这个分类还没有影片' : '服务器片库还没有视频'}</h2><p>{status.online ? '在服务器片库添加或下载视频后，目录会显示在这里。' : '已下载的视频请切换到“本地”观看。'}</p></div>
+    {shown.length === 0 ? <div className={styles.statePanel}><h2>{query ? '没有找到这部影片' : status.catalog.length ? '暂无影片' : '暂无影片'}</h2></div>
       : <div className={styles.posterGrid}>{shown.map(({ id, items }) => {
         const item = items[0];
         const cached = items.filter((entry) => entry.cachedLocalId).length;

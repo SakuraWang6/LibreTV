@@ -127,7 +127,7 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/80 py-10 px-4 animate-fade-in"
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/30 backdrop-blur-md py-10 px-4 animate-fade-in"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -185,9 +185,6 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
                         </div>
                       ))}
                     </div>
-                  )}
-                  {info?.desc && (
-                    <p className="text-sm text-muted leading-relaxed line-clamp-3">{info.desc}</p>
                   )}
                 </div>
               </div>

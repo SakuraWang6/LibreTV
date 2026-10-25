@@ -372,27 +372,21 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
   };
 
   return (
-    <Drawer open={isOpen} onClose={onClose} title="下载管理" width="max-w-lg">
-      <div className="space-y-3">
+    <Drawer open={isOpen} onClose={onClose} title="下载" width="max-w-lg">
+      <div className="mac-download-manager space-y-3">
         {!libraryEnabled && <div className="card p-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm text-content">经服务器中转下载</p>
-            <p className="text-xs text-faint">
-              直连被跨域 / 防盗链 / 混合内容拦下时开启：整集流量（含分片与密钥）经服务器转发，
-              带宽由部署者承担。仅对之后开始的任务生效。
-            </p>
           </div>
           <Switch checked={proxy} onChange={onToggleProxy} label="经服务器中转下载" />
         </div>}
         {libraryEnabled && (
           <div className="card p-3 space-y-1">
-            <p className="text-sm text-content">后台下载 · 完成后自动入库</p>
-            <p className="text-xs text-muted">关闭这个窗口也会继续下载。下载所在的电脑或服务器需保持开机、联网，LibreTV 后台服务需运行。</p>
-            <Link href="/library" className="text-xs text-accent hover:underline" onClick={onClose}>打开影视库</Link>
+            <div className="flex items-center justify-between"><span className="text-xs text-muted">后台任务</span><Link href="/library" className="text-xs text-accent hover:underline" onClick={onClose}>影视库</Link></div>
           </div>
         )}
-        {libraryEnabled && backgroundError && <p className="text-xs text-red-400" role="status">{backgroundError}。已提交的任务以后台服务记录为准。</p>}
-        {libraryEnabled && workerOnline === false && !backgroundError && <p className="text-xs text-amber-400" role="status">后台下载服务暂未运行，排队任务会在服务启动后继续。</p>}
+        {libraryEnabled && backgroundError && <p className="text-xs text-danger" role="status">{backgroundError}</p>}
+        {libraryEnabled && workerOnline === false && !backgroundError && <p className="text-xs text-warning" role="status">后台服务未连接</p>}
         {!libraryEnabled && <p className="text-xs text-faint">
           保存能力：{capability === 'fs-access' ? '磁盘直写（边下边存）' : '内存聚合（完成后浏览器下载）'}
           {chunkCache ? ' · 支持断点续传' : ' · 当前环境无断点缓存（需 HTTPS 访问）'} ·
@@ -401,7 +395,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         </p>}
         {tasks.length === 0 && backgroundTasks.length === 0 && (
           <div className="py-10 text-center text-sm text-faint">
-            暂无下载任务。在播放页点击「下载本集」开始。
+            暂无下载
           </div>
         )}
         {backgroundTasks.map((task) => {
@@ -422,12 +416,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
                     : <button type="button" aria-label="移除下载记录" disabled={busyTasks.has(task.id)} onClick={() => void onBackgroundAction(task, 'remove')} className="p-1.5 rounded bg-chip hover:bg-hover disabled:opacity-50 text-content"><Icon name="close" className="w-4 h-4" /></button>}
                 </div>
               </div>
-              {task.error && task.status === 'failed' && <p className="text-xs text-red-400 break-words">{task.error}</p>}
+              {task.error && task.status === 'failed' && <p className="text-xs text-danger break-words">{task.error}</p>}
               {task.total > 0 && task.status !== 'cancelled' && <div className="h-1.5 rounded-full bg-chip overflow-hidden"><div className="h-full bg-accent transition-all" style={{ width: `${task.status === 'completed' ? 100 : progress}%` }} /></div>}
             </div>
           );
         })}
-        {libraryEnabled && tasks.length > 0 && <p className="text-xs text-faint">以前的浏览器下载记录：未完成的入库任务可点「继续」转为后台任务。</p>}
+        {libraryEnabled && tasks.length > 0 && <p className="text-xs text-faint">浏览器任务</p>}
         {tasks.map((t) => (
           <div key={t.id} className="card p-3 space-y-2">
             <div className="flex items-start justify-between gap-2">

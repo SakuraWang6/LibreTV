@@ -129,6 +129,8 @@ export interface AuthStatusResponse {
   passwordRequired: boolean;
   /** 当前会话是否已验证 */
   verified: boolean;
+  /** Mac 专用启动器为本次本机请求启用了免登录 */
+  localAuthBypass?: boolean;
   version: string;
   /** 部署者通过 DEFAULT_SOURCES 环境变量预置的采集站（未配置时为空数组） */
   defaultSources: SourceConfig[];

@@ -45,6 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [setupRequired, setSetupRequired] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const localAuthBypass = useRef(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -55,8 +56,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .fetchQuery({ queryKey: STATUS_QUERY_KEY, queryFn: () => api.status() })
       .then((s) => {
         if (cancelled) return;
+        localAuthBypass.current = s.localAuthBypass === true && s.verified;
         setVerified(s.verified);
         setSetupRequired(!s.passwordRequired);
+        if (s.verified) setModalOpen(false);
         setVersion(s.version);
         setChecked(true);
       })
@@ -71,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       onUnauthorized((event) => {
+        if (localAuthBypass.current) return;
         const setup = (event as CustomEvent).detail === 'setup';
         setSetupRequired(setup);
         setVerified(false);
@@ -79,9 +83,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const openLogin = useCallback(() => setModalOpen(true), []);
+  const openLogin = useCallback(() => {
+    if (!localAuthBypass.current) setModalOpen(true);
+  }, []);
 
   const logout = useCallback(async () => {
+    if (localAuthBypass.current) return;
     try {
       await api.logout();
     } finally {

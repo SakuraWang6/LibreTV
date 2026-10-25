@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Header } from '@/components/header';
+import { Header, requestShowSettings } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
 import { DetailModal } from '@/components/detail-modal';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
@@ -15,7 +15,6 @@ import { cn, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
-import { SiteFooter } from '@/components/site-footer';
 
 /**
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
@@ -167,25 +166,11 @@ function HomeContent() {
     <div className="min-h-screen flex flex-col">
       <Header />
 
-      <main className="relative flex-1 max-w-6xl w-full mx-auto px-4 py-6">
-        {/* 首屏氛围渐变 */}
-        {!urlQuery && (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 top-0 h-[420px] -z-10"
-            style={{
-              background:
-                'radial-gradient(60% 60% at 50% 0%, rgba(35,173,229,0.10) 0%, rgba(35,173,229,0.03) 45%, transparent 75%)',
-            }}
-          />
-        )}
-
+      <main className="mac-discover relative flex-1 w-full">
         {/* 搜索区 */}
-        <section className={cn('flex flex-col items-center', urlQuery ? 'mb-6' : 'mt-8 mb-8')}>
+        <section className="mac-discover-search flex flex-col">
           {!urlQuery && (
-            <header className="text-center mb-6">
-              <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">LibreTV</h1>
-            </header>
+            <h1>发现</h1>
           )}
           {urlQuery && <h1 className="sr-only">LibreTV 视频搜索</h1>}
           {/* 定位容器比胶囊宽一圈：浮层按它的宽度对齐，接缝处不会与胶囊边框错位 1px */}
@@ -216,7 +201,7 @@ function HomeContent() {
                 <input
                   ref={inputRef}
                   className="flex-1 min-w-0 pr-2 bg-transparent text-sm text-content placeholder:text-faint focus:outline-none"
-                  placeholder="输入影片名称..."
+                  placeholder="搜索电影、电视剧"
                   value={input}
                   maxLength={100}
                   onChange={(e) => {
@@ -314,15 +299,13 @@ function HomeContent() {
 
             {disabledSources.length > 0 && (
               <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                {disabledSources.length} 个源因连续超时/失败已暂停参与搜索（临时停用的到期自动恢复，
-                长期停用的需在设置中手动恢复）：{disabledSources.map((key) => sourceName(key)).join('、')}
+                已停用：{disabledSources.map((key) => sourceName(key)).join('、')}
               </div>
             )}
 
             {offSubscriptionSources.length > 0 && (
               <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                {offSubscriptionSources.length} 个源所属的订阅已停用，未参与本次搜索（在设置 → 数据源订阅中可重新启用）：
-                {offSubscriptionSources.map((key) => sourceName(key)).join('、')}
+                订阅已停用：{offSubscriptionSources.map((key) => sourceName(key)).join('、')}
               </div>
             )}
 
@@ -375,7 +358,6 @@ function HomeContent() {
         )}
       </main>
 
-      <SiteFooter />
 
       <DetailModal item={detailItem} onClose={() => setDetailItem(null)} />
     </div>
@@ -405,17 +387,7 @@ function NoSourceGuide({ hasSources = false }: { hasSources?: boolean }) {
   return (
     <div className="border border-dashed border-line rounded-xl p-10 text-center max-w-lg mx-auto">
       <h3 className="text-content font-medium mb-2">{hasSources ? '尚未勾选点播源' : '先添加一个点播源'}</h3>
-      <p className="text-sm text-muted leading-relaxed">
-        {hasSources ? (
-          <>点击右上角「设置」，勾选要参与搜索的点播源后重新搜索。</>
-        ) : (
-          <>
-            LibreTV 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
-            Apple CMS 采集站地址（如 <code className="text-accent text-xs">https://example.com/api.php/provide/vod</code>），
-            勾选后即可开始搜索。
-          </>
-        )}
-      </p>
+      <button className="btn-ghost btn-sm mt-3" onClick={requestShowSettings}>设置点播源</button>
     </div>
   );
 }

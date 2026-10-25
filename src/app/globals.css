@@ -4,65 +4,55 @@
 
 /*
  * 语义化配色（RGB 三元组，供 Tailwind 以 <alpha-value> 注入透明度）：
- * 深色主题沿用旧版 LibreTV 配色；浅色主题为对应的白底变体。
+ * 使用系统中性色与蓝色强调，亮暗主题共用组件。
  */
 :root {
-  --c-page: 246 247 249;           /* #f6f7f9 */
-  --c-surface: 255 255 255;        /* #ffffff */
+  --c-page: 250 250 252;
+  --c-surface: 250 250 252;
   --c-surface-raised: 255 255 255;
   --c-card: 255 255 255;
-  --c-chip: 238 240 243;           /* #eef0f3 */
-  --c-hover: 233 236 240;          /* #e9ecf0 */
-  --c-line: 224 227 232;           /* #e0e3e8 */
-  --c-content: 26 26 26;           /* #1a1a1a */
-  --c-muted: 95 99 104;            /* #5f6368 */
-  --c-faint: 107 114 128;          /* #6b7280（原 #8a8f98 对白底仅 3.2:1，加深后达到 AA 4.5:1） */
-  --c-accent: 37 99 235;           /* blue-600 */
-  --c-accent-hover: 29 78 216;     /* blue-700 */
-  --c-on-accent: 255 255 255;      /* accent 实心底上的文字色 */
-  /* 语义状态色（亮色主题取偏深值，保证浅底上的对比度） */
-  --c-danger: 220 38 38;           /* red-600 */
-  --c-danger-hover: 185 28 28;     /* red-700 */
-  --c-success: 22 163 74;          /* green-600 */
-  --c-warning: 217 119 6;          /* amber-600 */
-  --c-info: 37 99 235;             /* blue-600 */
-  --c-rating: 245 158 11;          /* amber-500 */
-  /* 实心状态底色（配白字）：比「文字用」色更深一档，保证白字对比度 ≥ 4.5:1 */
-  --c-danger-solid: 185 28 28;     /* red-700 */
-  --c-success-solid: 21 128 61;    /* green-700 */
-  --c-warning-solid: 180 83 9;     /* amber-700 */
-  --c-info-solid: 29 78 216;       /* blue-700 */
+  --c-chip: 238 238 242;
+  --c-hover: 228 229 235;
+  --c-line: 221 222 228;
+  --c-content: 29 29 31;
+  --c-muted: 99 99 105;
+  --c-faint: 119 119 128;
+  --c-accent: 0 102 224;
+  --c-accent-hover: 0 88 203;
+  --c-on-accent: 255 255 255;
+  --c-danger: 207 52 52;
+  --c-danger-hover: 180 40 40;
+  --c-success: 35 135 65;
+  --c-warning: 166 103 0;
+  --c-info: 0 102 224;
+  --c-rating: 187 114 0;
+  --c-danger-solid: 185 28 28;
+  --c-success-solid: 21 128 61;
+  --c-warning-solid: 166 103 0;
+  --c-info-solid: 0 102 224;
   color-scheme: light;
 }
 
 .dark {
-  /* 旧版 LibreTV（backup-2025）赛博影视主题（整体调深一档）：深蓝黑底 + 霓虹蓝/粉点缀 */
-  --c-page: 11 16 26;              /* #0b101a 深蓝黑页面底色 */
-  --c-surface: 20 28 41;           /* #141c29 弹窗/抽屉底色 */
-  --c-surface-raised: 20 28 41;
-  --c-card: 13 20 31;              /* #0d141f 卡片底色 */
-  --c-chip: 22 32 46;              /* #16202e 卡片/输入框底色 */
-  --c-hover: 29 42 61;             /* #1d2a3d 悬停态（chip 提亮） */
-  --c-line: 34 48 69;              /* #223045 边框（近似旧版 rgba(0,204,255,.15) 观感） */
-  --c-content: 230 242 255;        /* #e6f2ff 蓝白主文本（--text-color） */
-  --c-muted: 133 153 178;          /* #8599b2 次级文本（--text-muted） */
-  --c-faint: 122 140 166;          /* #7a8ca6 三级文本（原 #6b7f99 在抽屉底色 #141c29 上仅 4.17:1，12px 小字不达标；提亮后 4.99:1） */
-  --c-accent: 0 184 230;           /* #00b8e6 霓虹蓝主色（--primary-color 调深一档） */
-  --c-accent-hover: 51 214 255;    /* #33d6ff 霓虹蓝浅变体（--primary-light） */
-  /* 霓虹蓝底亮度过高（对白字仅 2.35:1），暗色下实心底改用深色文字 */
-  --c-on-accent: 8 19 31;
-  /* 语义状态色（暗色主题取中等明度值，保证深蓝黑底上的对比度） */
-  --c-danger: 239 68 68;           /* red-500 */
-  --c-danger-hover: 248 113 113;   /* red-400 */
-  --c-success: 34 197 94;          /* green-500 */
-  --c-warning: 245 158 11;         /* amber-500 */
-  --c-info: 59 130 246;            /* blue-500 */
-  --c-rating: 251 191 36;          /* amber-400 */
-  /* 实心状态底色（配白字）：与亮色一致取深档，避免琥珀/绿色底白字对比度不足 */
-  --c-danger-solid: 185 28 28;     /* red-700 */
-  --c-success-solid: 21 128 61;    /* green-700 */
-  --c-warning-solid: 180 83 9;     /* amber-700 */
-  --c-info-solid: 29 78 216;       /* blue-700 */
+  --c-page: 29 29 31;
+  --c-surface: 36 36 39;
+  --c-surface-raised: 43 43 46;
+  --c-card: 43 43 46;
+  --c-chip: 54 54 59;
+  --c-hover: 65 65 71;
+  --c-line: 64 64 69;
+  --c-content: 242 242 247;
+  --c-muted: 178 178 186;
+  --c-faint: 151 151 162;
+  --c-accent: 70 154 255;
+  --c-accent-hover: 105 175 255;
+  --c-on-accent: 15 28 45;
+  --c-danger: 255 105 105;
+  --c-danger-hover: 255 135 135;
+  --c-success: 79 195 105;
+  --c-warning: 240 180 70;
+  --c-info: 70 154 255;
+  --c-rating: 240 180 70;
   color-scheme: dark;
 }
 
@@ -71,14 +61,16 @@ body {
   @apply bg-page text-content antialiased;
 }
 
-/* 暗色主题：模拟旧版 .page-bg 的深蓝黑纵向渐变 */
+/* 深色外观保持中性背景。 */
 .dark body {
-  background: linear-gradient(180deg, rgb(11 16 26), rgb(20 28 41)) fixed;
+  background: rgb(var(--c-page));
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'PingFang SC', sans-serif;
+  font-size: 13px;
+  letter-spacing: -.012em;
+  -webkit-font-smoothing: antialiased;
 }
 
 @layer components {
@@ -133,13 +125,9 @@ body {
   color: rgb(var(--c-on-accent)) !important;
 }
 
-/* 品牌渐变字（沿用旧版 LibreTV 的霓虹蓝→霓虹粉） */
+/* 品牌文字沿用系统前景色。 */
 .brand-gradient {
-  background: linear-gradient(to right, #00ccff, #ff3c78);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  color: rgb(var(--c-content));
 }
 
 /* LIVE 呼吸红点（直播页标识） */
@@ -188,3 +176,32 @@ body {
     min-width: 40px !important;
   }
 }
+
+/* Native-style app chrome; the sidebar collapses into a sheet on compact screens. */
+.mac-sidebar { position: fixed; z-index: 42; inset: 0 auto 0 0; width: 212px; display: flex; flex-direction: column; padding: 18px 13px 15px; border-right: 1px solid rgb(var(--c-line) / .85); background: rgb(238 239 243 / .88); backdrop-filter: blur(28px) saturate(1.5); color: #34343a; }
+.mac-window-controls { display: flex; gap: 8px; padding: 1px 10px 24px; }
+.mac-window-controls i { width: 12px; height: 12px; border-radius: 50%; border: 1px solid #00000010; background: #ff6058; }.mac-window-controls i:nth-child(2) { background: #ffbd2e; }.mac-window-controls i:nth-child(3) { background: #28c840; }
+.mac-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 25px; }.mac-brand strong { font-size: 18px; letter-spacing: -.6px; font-weight: 650; }
+.mac-brand-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: #0879f9; color: white; box-shadow: inset 0 1px 1px #ffffff40, 0 2px 5px #0060d325; }.mac-brand-icon svg { width: 21px; height: 21px; stroke-width: 1.6; }
+.mac-sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; }.mac-nav-label { padding: 14px 11px 6px; font-size: 10px; font-weight: 600; color: #898992; }
+.mac-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 8px 11px; margin-bottom: 3px; text-align: left; border-radius: 6px; color: #45454d; font-size: 12px; white-space: nowrap; transition: background .15s; }.mac-nav-item svg { width: 17px; height: 17px; stroke-width: 1.6; color: #6d6d77; }.mac-nav-item:hover { background: #00000005; }.mac-nav-item.is-active { background: #d6e5fb; color: #075cbf; font-weight: 550; }.mac-nav-item.is-active svg { color: #0871df; }
+.mac-sidebar-bottom { border-top: 1px solid #d7d8df; padding-top: 10px; margin-top: 20px; }.mac-about { display: inline-block; font-size: 10px; color: #93939c; padding: 8px 11px 0; }
+.mac-appbar { position: sticky; top: 0; z-index: 40; height: 58px; margin-left: 212px; padding: 0 27px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid rgb(var(--c-line) / .8); background: rgb(var(--c-page) / .83); backdrop-filter: blur(24px) saturate(1.4); }
+.mac-toolbar-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }.mac-toolbar-title { font-size: 13px; font-weight: 600; white-space: nowrap; }.mac-toolbar-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }.mac-toolbar-actions > button, .mac-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 6px; border-radius: 6px; color: rgb(var(--c-muted)); }.mac-toolbar-actions > button:hover, .mac-icon-button:hover { background: rgb(var(--c-hover) / .7); }.mac-toolbar-actions svg, .mac-icon-button svg { width: 17px; height: 17px; }
+.mac-sidebar-toggle { display: none; }.mac-toolbar-search { width: min(300px, 40%); }.mac-toolbar-search > div { display: flex; align-items: center; gap: 6px; }.mac-toolbar-search > div > svg { position: absolute; z-index: 1; left: 9px; width: 14px; height: 14px; color: rgb(var(--c-faint)); }.mac-toolbar-search input { width: 100%; min-width: 0; border: 1px solid rgb(var(--c-line)); border-radius: 7px; background: rgb(var(--c-surface-raised) / .6); padding: 6px 8px 6px 29px; font-size: 11px; outline: none; }.mac-toolbar-search input:focus { border-color: rgb(var(--c-accent) / .5); box-shadow: 0 0 0 3px rgb(var(--c-accent) / .1); }
+.mac-appbar ~ main { margin-left: 212px; width: calc(100% - 212px); max-width: none; }.mac-appbar ~ footer { margin-left: 212px; }.mac-sidebar-overlay { display: none; }
+.mac-discover { padding: 32px 36px 45px; }.mac-discover-search { align-items: flex-start; margin: 0 0 30px; }.mac-discover-search h1 { font-size: 25px; font-weight: 650; margin-bottom: 20px; letter-spacing: -.7px; }.mac-discover-search > div { max-width: 620px; }.mac-discover-search form > div { min-height: 40px; border-radius: 8px; background: rgb(var(--c-surface-raised)); }.mac-discover-search button[type=submit] { border-radius: 0 7px 7px 0 !important; font-size: 12px; }.mac-discover-search input { font-size: 12px; }.mac-discover > section[aria-label] > div:first-child { margin-bottom: 18px; }
+.dark .mac-sidebar { background: rgb(43 43 47 / .92); border-color: #424247; color: #e5e5ec; }.dark .mac-brand strong, .dark .mac-nav-item { color: #d2d2db; }.dark .mac-nav-item svg { color: #a2a2af; }.dark .mac-nav-item:hover { background: #ffffff07; }.dark .mac-nav-item.is-active { background: #37689f80; color: #fff; }.dark .mac-nav-item.is-active svg { color: #8dc2ff; }.dark .mac-sidebar-bottom { border-color: #45454d; }
+@media (max-width: 1050px) { .mac-sidebar { width: 190px; }.mac-appbar { margin-left: 190px; padding: 0 23px; }.mac-appbar ~ main { margin-left: 190px; width: calc(100% - 190px); }.mac-appbar ~ footer { margin-left: 190px; }.mac-discover { padding: 27px 25px; } }
+@media (max-width: 760px) { .mac-sidebar { transform: translateX(-100%); transition: transform .2s; width: 220px; }.mac-sidebar.is-open { transform: translateX(0); }.mac-sidebar-overlay { display: block; position: fixed; inset: 0; background: #0005; z-index: 41; backdrop-filter: blur(2px); }.mac-sidebar-toggle { display: inline-flex; }.mac-appbar { margin-left: 0; height: 54px; padding: 0 14px; gap: 10px; }.mac-appbar ~ main { margin-left: 0; width: 100%; }.mac-appbar ~ footer { margin-left: 0; }.mac-toolbar-actions { gap: 2px; }.mac-toolbar-search { display: none; }.mac-discover { padding: 25px 20px 35px; }.mac-discover-search h1 { font-size: 23px; margin-bottom: 18px; }.mac-discover-search { margin-bottom: 25px; }.mac-window-controls { padding-top: 7px; } }
+@media (prefers-reduced-motion: reduce) { .mac-sidebar { transition: none; } }
+
+@media (max-width: 760px) {
+  .mac-appbar { height: 60px; }.mac-toolbar-actions > button, .mac-icon-button { width: 42px; height: 44px; padding: 11px; }.mac-toolbar-actions { gap: 0; }.mac-toolbar-leading { gap: 6px; }.mac-toolbar-title { font-size: 13px; }
+  .mac-nav-item { min-height: 42px; font-size: 13px; }.mac-nav-label { font-size: 11px; }.mac-about { min-height: 40px; display: flex; align-items: center; font-size: 12px; }
+  .mac-discover-search form > div { min-height: 44px; }.mac-discover-search input { font-size: 16px; }.mac-discover-search button[type=submit] { min-height: 44px; font-size: 13px; }.mac-discover-search button[type=button] { min-width: 40px; min-height: 40px; }
+  .mac-download-manager button, .mac-download-manager a { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+  [role=dialog] button[aria-label=关闭] { min-width: 44px; min-height: 44px; }
+}
+
+@media (max-width: 760px) { .mac-sidebar:not(.is-open) { visibility: hidden; } }

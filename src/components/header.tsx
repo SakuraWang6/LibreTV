@@ -1,154 +1,118 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ThemeToggle } from './theme';
 import { SourceManagerDrawer } from './source-manager';
 import { HistoryPanel } from './history-panel';
 import { requestShowDownloadManager } from './download-manager';
-import { Icon } from './icon';
+import { Icon, type IconName } from './icon';
 import { SearchHistoryDropdown, useSearchHistory } from './search-history';
 import { cn } from '@/lib/utils';
 
-/** 顶部导航：Logo、搜索框（首页外）、历史、设置 */
-export function Header({ showSearch = false }: { showSearch?: boolean }) {
+interface LibraryNavigation {
+  filter: 'all' | 'movie' | 'tv';
+  onFilter: (filter: 'all' | 'movie' | 'tv') => void;
+  view: 'local' | 'server';
+  onView: (view: 'local' | 'server') => void;
+  hasServer: boolean;
+}
+
+export function Header({ showSearch = false, libraryNavigation }: { showSearch?: boolean; libraryNavigation?: LibraryNavigation }) {
   const router = useRouter();
   const pathname = usePathname();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [query, setQuery] = useState('');
-  // 与首页搜索框共用同一套「最近搜索」下拉逻辑
   const searchHistory = useSearchHistory(query);
+  const inLibrary = pathname.startsWith('/library');
+  const title = inLibrary ? '影视库' : pathname === '/' ? '发现' : pathname === '/live' ? '直播' : 'LibreTV';
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const sidebar = document.getElementById('app-sidebar');
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    sidebar?.querySelector<HTMLElement>('a, button')?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+      if (event.key !== 'Tab') return;
+      const controls = sidebar?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
+      if (!controls?.length) return;
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !sidebar?.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !sidebar?.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+    };
+    const media = window.matchMedia('(max-width: 760px)');
+    const onResize = () => { if (!media.matches) setSidebarOpen(false); };
+    media.addEventListener('change', onResize);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      media.removeEventListener('change', onResize);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const onShowSettings = () => setSettingsOpen(true);
+    window.addEventListener('libretv:show-settings', onShowSettings);
+    return () => window.removeEventListener('libretv:show-settings', onShowSettings);
+  }, []);
 
   const submitSearch = (text: string) => {
     const q = text.trim().slice(0, 100);
     if (!q) return;
     searchHistory.close();
     router.push(`/?s=${encodeURIComponent(q)}`, { scroll: false });
-    // 顶栏搜索一并写入最近搜索（此前只有首页会记录）
     searchHistory.record(q);
   };
-
-  const pickHistory = (text: string) => {
-    setQuery(text);
-    submitSearch(text);
+  const pickHistory = (text: string) => { setQuery(text); submitSearch(text); };
+  const selectFilter = (filter: 'all' | 'movie' | 'tv') => {
+    setSidebarOpen(false);
+    if (libraryNavigation) { libraryNavigation.onView('local'); libraryNavigation.onFilter(filter); }
+    else router.push(`/library${filter === 'all' ? '' : `?kind=${filter}`}`);
   };
+  const navButton = (label: string, icon: IconName, onClick: () => void, active?: boolean) => <button type="button" className={cn('mac-nav-item', active && 'is-active')} onClick={() => { onClick(); setSidebarOpen(false); }} aria-pressed={active}><Icon name={icon} /><span>{label}</span></button>;
 
-  return (
-    <>
-      <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-line">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
-          <Link href="/" aria-label="LibreTV 首页" className="flex items-center shrink-0">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/icons/icon-512.png" alt="LibreTV" className="w-7 h-7 rounded-lg" />
-          </Link>
-
-          {showSearch && (
-            <form
-              className="flex-1 max-w-xl hidden sm:block"
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitSearch(query);
-              }}
-            >
-              <div ref={searchHistory.containerRef} className="relative">
-                <input
-                  className={cn(
-                    'input w-full h-9',
-                    // 展开时：上圆角与外框沿用聚焦样式，底边改为内部分隔线，与下拉拼成同一面板
-                    searchHistory.visible &&
-                      'rounded-b-none border-accent border-b-line bg-surface-raised focus-visible:ring-0'
-                  )}
-                  aria-label="搜索影片"
-                  placeholder="搜索影片..."
-                  value={query}
-                  maxLength={100}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    searchHistory.resetActive();
-                  }}
-                  onFocus={searchHistory.onFocus}
-                  onKeyDown={(e) => searchHistory.onKeyDown(e, pickHistory)}
-                  role="combobox"
-                  aria-expanded={searchHistory.visible}
-                  aria-controls="header-search-history"
-                  aria-autocomplete="list"
-                  aria-activedescendant={
-                    searchHistory.visible && searchHistory.activeIndex >= 0
-                      ? `header-search-history-${searchHistory.activeIndex}`
-                      : undefined
-                  }
-                />
-                {searchHistory.visible && (
-                  <SearchHistoryDropdown
-                    id="header-search-history"
-                    matches={searchHistory.matches}
-                    activeIndex={searchHistory.activeIndex}
-                    onPick={pickHistory}
-                    onRemove={searchHistory.remove}
-                    onClearAll={searchHistory.clearAll}
-                  />
-                )}
-              </div>
-            </form>
-          )}
-
-          <div className="flex-1 sm:hidden" />
-
-          <nav className="flex shrink-0 items-center gap-0 sm:gap-1 ml-auto [&>button]:p-1.5 sm:[&>button]:p-2">
-            <HeaderLink href="/library" active={pathname.startsWith('/library')}>
-              本地库
-            </HeaderLink>
-            <HeaderLink href="/live" active={pathname === '/live'}>
-              直播
-            </HeaderLink>
-            <HeaderLink href="/about" active={pathname === '/about'}>
-              关于
-            </HeaderLink>
-            <ThemeToggle />
-            <IconButton label="观看历史" onClick={() => setHistoryOpen(true)}>
-              <Icon name="clock" />
-            </IconButton>
-            <IconButton label="下载管理" onClick={requestShowDownloadManager}>
-              <Icon name="download" />
-            </IconButton>
-            <IconButton label="设置" onClick={() => setSettingsOpen(true)}>
-              <Icon name="gear" />
-            </IconButton>
-          </nav>
-        </div>
-      </header>
-
-      <SourceManagerDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
-    </>
-  );
+  return <>
+    {sidebarOpen && <button type="button" className="mac-sidebar-overlay" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} />}
+    <aside id="app-sidebar" className={cn('mac-sidebar', sidebarOpen && 'is-open')} aria-label="主导航" role={sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOpen || undefined}>
+      <div className="mac-window-controls" aria-hidden="true"><i /><i /><i /></div>
+      <Link href="/library" className="mac-brand" onClick={() => setSidebarOpen(false)}><span className="mac-brand-icon"><Icon name="film" /></span><strong>LibreTV</strong></Link>
+      <nav className="mac-sidebar-nav">
+        <p className="mac-nav-label">浏览</p>
+        <Link href="/" className={cn('mac-nav-item', pathname === '/' && 'is-active')} onClick={() => setSidebarOpen(false)}><Icon name="search" /><span>发现</span></Link>
+        <p className="mac-nav-label">资料库</p>
+        {navButton('全部影片', 'library', () => selectFilter('all'), inLibrary && libraryNavigation?.view !== 'server' && (!libraryNavigation || libraryNavigation.filter === 'all'))}
+        {navButton('电影', 'film', () => selectFilter('movie'), inLibrary && libraryNavigation?.view !== 'server' && libraryNavigation?.filter === 'movie')}
+        {navButton('电视剧', 'tv', () => selectFilter('tv'), inLibrary && libraryNavigation?.view !== 'server' && libraryNavigation?.filter === 'tv')}
+        {libraryNavigation?.hasServer && navButton('服务器片库', 'server', () => libraryNavigation.onView('server'), libraryNavigation.view === 'server')}
+        {navButton('下载', 'download', requestShowDownloadManager)}
+        {navButton('观看历史', 'clock', () => setHistoryOpen(true))}
+        <p className="mac-nav-label">更多</p>
+        <Link href="/live" className={cn('mac-nav-item', pathname === '/live' && 'is-active')} onClick={() => setSidebarOpen(false)}><Icon name="bolt" /><span>直播</span></Link>
+      </nav>
+      <div className="mac-sidebar-bottom">{navButton('设置', 'gear', () => setSettingsOpen(true))}<Link href="/about" className="mac-about">关于 LibreTV</Link></div>
+    </aside>
+    <header className="mac-appbar">
+      <div className="mac-toolbar-leading"><IconButton label="显示侧栏" onClick={() => setSidebarOpen(!sidebarOpen)} expanded={sidebarOpen} className="mac-sidebar-toggle"><Icon name="sidebar" /></IconButton><span className="mac-toolbar-title">{title}</span></div>
+      {(showSearch || !inLibrary) && pathname !== '/' && <form className="mac-toolbar-search" onSubmit={(event) => { event.preventDefault(); submitSearch(query); }}><div ref={searchHistory.containerRef} className="relative"><Icon name="search" /><input value={query} onChange={(event) => { setQuery(event.target.value); searchHistory.resetActive(); }} onFocus={searchHistory.onFocus} onKeyDown={(event) => searchHistory.onKeyDown(event, pickHistory)} placeholder="搜索影片" aria-label="搜索影片" role="combobox" aria-expanded={searchHistory.visible} aria-controls="header-search-history" aria-autocomplete="list" aria-activedescendant={searchHistory.visible && searchHistory.activeIndex >= 0 ? `header-search-history-${searchHistory.activeIndex}` : undefined} />{searchHistory.visible && <SearchHistoryDropdown id="header-search-history" matches={searchHistory.matches} activeIndex={searchHistory.activeIndex} onPick={pickHistory} onRemove={searchHistory.remove} onClearAll={searchHistory.clearAll} />}</div></form>}
+      <div className="mac-toolbar-actions"><ThemeToggle /><IconButton label="下载管理" onClick={requestShowDownloadManager}><Icon name="download" /></IconButton><IconButton label="设置" onClick={() => setSettingsOpen(true)}><Icon name="gear" /></IconButton></div>
+    </header>
+    <SourceManagerDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
+  </>;
 }
 
-function HeaderLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
-  return (
-    <Link
-      href={href}
-      className={cn(
-        'shrink-0 whitespace-nowrap px-1.5 sm:px-2.5 py-1.5 rounded-md text-xs sm:text-sm transition-colors',
-        active ? 'text-content bg-hover' : 'text-muted hover:text-content'
-      )}
-    >
-      {children}
-    </Link>
-  );
+export function requestShowSettings(): void {
+  window.dispatchEvent(new CustomEvent('libretv:show-settings'));
 }
 
-function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      className="p-2 rounded-md text-muted hover:text-content hover:bg-hover transition-colors"
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
+function IconButton({ label, onClick, children, expanded, className }: { label: string; onClick: () => void; children: ReactNode; expanded?: boolean; className?: string }) {
+  return <button type="button" className={cn('mac-icon-button', className)} title={label} aria-label={label} aria-expanded={expanded} aria-controls={expanded !== undefined ? 'app-sidebar' : undefined} onClick={onClick}>{children}</button>;
 }

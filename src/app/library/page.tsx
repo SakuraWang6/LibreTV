@@ -55,10 +55,6 @@ function unfinished(entry: LibraryEntry): boolean {
   return (entry.position || 0) > 3 && (!entry.duration || (entry.position || 0) < entry.duration - 10);
 }
 
-function plainDescription(description: string): string {
-  return description.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
-}
-
 function orderedEpisodes(items: LibraryEntry[]): LibraryEntry[] {
   return [...items].sort((a, b) => (a.seasonNumber || 1) - (b.seasonNumber || 1) || (a.episodeNumber || 0) - (b.episodeNumber || 0) || a.createdAt.localeCompare(b.createdAt));
 }
@@ -160,7 +156,12 @@ export default function LibraryPage() {
   }, [checked, verified, refresh]);
 
   useEffect(() => {
-    const readLocation = () => setSelectedId(new URLSearchParams(window.location.search).get('play'));
+    const readLocation = () => {
+      const params = new URLSearchParams(window.location.search);
+      setSelectedId(params.get('play'));
+      const kind = params.get('kind');
+      if (kind === 'movie' || kind === 'tv') setFilter(kind);
+    };
     readLocation();
     window.addEventListener('popstate', readLocation);
     return () => window.removeEventListener('popstate', readLocation);
@@ -238,35 +239,33 @@ export default function LibraryPage() {
 
   return (
     <div className={styles.page}>
-      <Header />
+      <Header libraryNavigation={{ filter, onFilter: (value) => { setFilter(value); selectEntry(null); }, view: libraryView, onView: setLibraryView, hasServer: !!syncStatus?.enabled }} />
       <main className={styles.main}>
         <section className={styles.hero} aria-labelledby="library-title">
           <div>
-            <p className={styles.eyebrow}><span /> PRIVATE CINEMA</p>
-            <h1 id="library-title">{libraryView === 'server' ? '服务器片库' : onThisMac ? '本地影视库' : '影视库'}<span className={styles.titleDot}>.</span></h1>
-            <p className={styles.heroDescription}>收藏好故事，随时开场。</p>
+            <h1 id="library-title">{libraryView === 'server' ? '服务器片库' : filter === 'movie' ? '电影' : filter === 'tv' ? '电视剧' : '全部影片'}</h1>
           </div>
           <div className={styles.heroAside}>
-            <span className={styles.localBadge}><span /> {libraryView === 'server' ? syncStatus?.online ? '服务器已连接' : '服务器暂未连接' : onThisMac ? '储存在这台 Mac' : '储存在服务器'}</span>
-            {verified && enabled && libraryView === 'local' && <button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入已有视频</button>}
+            <span className={styles.localBadge}><span /> {libraryView === 'server' ? syncStatus?.online ? '已连接' : '未连接' : onThisMac ? '本机' : '服务器'}</span>
+            {verified && enabled && libraryView === 'local' && <button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入视频</button>}
           </div>
         </section>
 
-        {verified && syncStatus?.enabled && <nav className={styles.locationTabs} aria-label="片库存储位置"><button aria-pressed={libraryView === 'local'} className={libraryView === 'local' ? styles.activeLocation : ''} onClick={() => setLibraryView('local')}>本地 · 离线可看</button><button aria-pressed={libraryView === 'server'} className={libraryView === 'server' ? styles.activeLocation : ''} onClick={() => setLibraryView('server')}>服务器片库</button></nav>}
+        {verified && syncStatus?.enabled && <nav className={styles.locationTabs} aria-label="片库存储位置"><button aria-pressed={libraryView === 'local'} className={libraryView === 'local' ? styles.activeLocation : ''} onClick={() => setLibraryView('local')}>本地</button><button aria-pressed={libraryView === 'server'} className={libraryView === 'server' ? styles.activeLocation : ''} onClick={() => setLibraryView('server')}>服务器片库</button></nav>}
 
         <input className={styles.fileInput} ref={fileInput} type="file" accept=".mp4,.m4v,.mov,.webm,video/mp4,video/webm,video/quicktime" multiple onChange={chooseFiles} aria-label="选择要导入本地库的视频" />
 
         {!checked || (verified && loading) ? (
           <div className={styles.loading} role="status"><span />正在打开你的影视库…</div>
         ) : !verified ? (
-          <StatePanel icon="folder" title="你的私人放映室" description="验证后查看你的电影和电视剧。"><button className={styles.primaryButton} onClick={openLogin}>验证后打开影视库<LibraryIcon name="arrow" className={styles.forwardArrow} /></button></StatePanel>
+          <StatePanel icon="folder" title="影视库已锁定" description=""><button className={styles.primaryButton} onClick={openLogin}>解锁<LibraryIcon name="arrow" className={styles.forwardArrow} /></button></StatePanel>
         ) : enabled === false ? (
-          <StatePanel icon="folder" title="影视库尚未启用" description="此部署尚未配置影视库存储。配置后即可导入或下载视频。" />
+          <StatePanel icon="folder" title="影视库尚未启用" description="未配置存储目录" />
         ) : error && enabled === null ? (
           <StatePanel icon="folder" title="暂时无法打开本地库" description={error}><button className={styles.secondaryButton} onClick={() => void refresh()}>重新读取</button></StatePanel>
         ) : (
           <>
-            {syncStatus?.enabled && syncError && <div role="status" className={styles.errorBanner}>{syncError}。本地视频仍可播放。<button onClick={() => void refreshSync()}>重新连接</button></div>}
+            {syncStatus?.enabled && syncError && <div role="status" className={styles.errorBanner}>{syncError}<button onClick={() => void refreshSync()}>重新连接</button></div>}
             {syncStatus?.enabled && <ProgressConflicts conflicts={syncStatus.progressConflicts} online={syncStatus.online} onRefresh={refreshSync} />}
             {libraryView === 'server' && syncStatus?.enabled ? <ServerLibrary status={syncStatus} onRefresh={refreshSync} onPlay={(id) => void playCached(id)} /> : <>
             {error && <div role="alert" className={styles.errorBanner}>{error}<button onClick={() => void refresh()}>重试</button></div>}
@@ -278,7 +277,7 @@ export default function LibraryPage() {
             {selectedId && !selected && !loading && <div className={styles.errorBanner}>这部视频尚未入库或已不在当前片库中。<button onClick={() => selectEntry(null)}>返回片库</button></div>}
 
             {continuing.length > 0 && !query && filter === 'all' && <section className={styles.continueSection} aria-labelledby="continue-title">
-              <div className={styles.sectionHeading}><h2 id="continue-title">继续观看</h2><span>接着上次的故事</span></div>
+              <div className={styles.sectionHeading}><h2 id="continue-title">继续观看</h2></div>
               <div className={styles.continueGrid}>{continuing.map((item) => <button key={item.id} className={styles.continueCard} onClick={() => selectEntry(item.id)}>
                 <Poster entry={item} className={styles.continuePoster} />
                 <div className={styles.continueInfo}><span className={styles.smallEyebrow}>{item.kind === 'tv' ? episodeLabel(item) : '电影'}</span><strong>{item.title}</strong><span>{item.duration ? `还剩 ${timeLabel(Math.max(0, item.duration - (item.position || 0)))}` : `已观看 ${timeLabel(item.position)}`}</span><div className={styles.progressTrack}><i style={{ width: `${percentPlayed(item)}%` }} /></div></div>
@@ -291,10 +290,10 @@ export default function LibraryPage() {
                 <div className={styles.tabs} role="group" aria-label="影视分类">
                   {([{ key: 'all', label: '全部', count: collections.length }, { key: 'movie', label: '电影', count: movieCount }, { key: 'tv', label: '电视剧', count: tvCount }] as const).map(({ key, label, count }) => <button key={key} className={filter === key ? styles.activeTab : ''} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}<span>{count}</span></button>)}
                 </div>
-                <div className={styles.collectionTools}><label className={styles.searchBox}><LibraryIcon name="search" /><input type="search" aria-label="搜索本地片名" placeholder="搜索本地片名" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select className={styles.sortSelect} aria-label="片库排序" value={sort} onChange={(event) => setSort(event.target.value as 'added' | 'title')}><option value="added">最近入库</option><option value="title">片名排序</option></select></div>
+                <div className={styles.collectionTools}><label className={styles.searchBox}><LibraryIcon name="search" /><input type="search" aria-label="搜索本地片名" placeholder="搜索影片" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select className={styles.sortSelect} aria-label="片库排序" value={sort} onChange={(event) => setSort(event.target.value as 'added' | 'title')}><option value="added">最近入库</option><option value="title">片名排序</option></select></div>
               </div>
 
-              {items.length === 0 ? <StatePanel icon="film" title="第一部收藏，从这里开始" description="在线播放页点击下载，后台完成后会自动出现在这里。也可以导入设备上已有的视频。"><button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入已有视频</button><Link className={styles.secondaryButton} href="/">去找一部好片<LibraryIcon name="arrow" className={styles.forwardArrow} /></Link></StatePanel> : shown.length === 0 ? <StatePanel icon="search" title={query ? `没有找到“${query}”` : `还没有${filter === 'tv' ? '电视剧' : '电影'}`} description={query ? '换一个片名试试，搜索范围是当前片库中已保存的视频。' : '下载或导入后，会自动整理到这个分类。'} /> : <div className={styles.posterGrid}>{shown.map(({ id, entry, episodes }) => {
+              {items.length === 0 ? <StatePanel icon="film" title="暂无影片" description=""><button className={styles.primaryButton} onClick={() => fileInput.current?.click()}><LibraryIcon name="upload" />导入视频</button><Link className={styles.secondaryButton} href="/">发现影片<LibraryIcon name="arrow" className={styles.forwardArrow} /></Link></StatePanel> : shown.length === 0 ? <StatePanel icon="search" title={query ? `未找到“${query}”` : `暂无${filter === 'tv' ? '电视剧' : '电影'}`} description="" /> : <div className={styles.posterGrid}>{shown.map(({ id, entry, episodes }) => {
                 const resume = [...episodes].filter(unfinished).sort((a, b) => (b.lastPlayedAt || '').localeCompare(a.lastPlayedAt || ''))[0];
                 const target = resume || episodes[0];
                 return <button key={id} className={styles.movieCard} onClick={() => selectEntry(target.id)} aria-label={`${resume ? '继续观看' : '播放'} ${entry.title}${entry.kind === 'tv' ? `，已存 ${episodes.length} 集` : ''}`}>
@@ -439,24 +438,23 @@ function LocalPlayer({ entry, episodes, onSelect, onProgress, isLocalService }: 
           onSeeked={(event) => { syncPlayback(event.currentTarget); save(); }}
           onEnded={(event) => { syncPlayback(event.currentTarget); save(); setEnded(true); }}
           onPlaying={() => { setEnded(false); setPlayError(''); }}
-          onError={() => setPlayError('浏览器无法播放这个文件。可保存视频后，用设备上的视频播放器打开。')}
+          onError={() => setPlayError('此格式无法播放')}
           aria-label={`${entry.title} ${entry.kind === 'tv' ? episodeLabel(entry) : ''}`} />
         {playError && <div className={styles.videoMessage} role="alert"><LibraryIcon name="film" /><p>{playError}</p><a href={downloadUrl} download className={styles.secondaryButton}>保存视频到设备</a></div>}
         {ended && next && <div className={styles.endedMessage}><p>本集已播放完</p><button className={styles.primaryButton} onClick={() => onSelect(next.id)}><LibraryIcon name="next" />播放下一集</button></div>}
       </div>
       <div className={styles.playbackBar}><span>{entry.kind === 'tv' ? episodeLabel(entry) : '电影'} · {sizeLabel(entry.bytes)}</span>{entry.kind === 'tv' && <div><button disabled={!previous} onClick={() => previous && onSelect(previous.id)}><LibraryIcon name="previous" />上一集</button><button disabled={!next} onClick={() => next && onSelect(next.id)}>下一集<LibraryIcon name="next" /></button></div>}</div>
-      {saveError && <p className={styles.progressError} role="status">观看进度暂未保存，请确认影视库服务仍在运行。</p>}
-      <p className={styles.keyboardHint}>空格播放 / 暂停<span>← → 快退 / 快进 5 秒</span><span>F 全屏</span></p>
-      <div className={styles.deviceDownload}><a href={downloadUrl} download className={styles.secondaryButton}><LibraryIcon name="folder" />保存视频到设备</a><p>iPhone / iPad 可保存到“文件”或导入 VLC 离线观看。在这些 App 中观看的进度不会回传到影视库。</p></div>
+      {saveError && <p className={styles.progressError} role="status">进度保存失败</p>}
+
+      <div className={styles.deviceDownload}><a href={downloadUrl} download className={styles.secondaryButton}><LibraryIcon name="folder" />保存视频到设备</a><p>Files / VLC 不同步进度</p></div>
     </div>
     <aside className={styles.playerDetails}>
-      <p className={styles.smallEyebrow}>NOW SHOWING · {entry.kind === 'tv' ? '电视剧' : '电影'}</p><h2>{entry.title}</h2>
+      <p className={styles.smallEyebrow}>{entry.kind === 'tv' ? '电视剧' : '电影'}</p><h2>{entry.title}</h2>
       <p className={styles.detailMeta}>{[entry.year, entry.format, entry.kind === 'tv' ? `${episodes.length} 集已入库` : entry.duration ? timeLabel(entry.duration) : '本地收藏'].filter(Boolean).join(' · ')}</p>
-      {entry.description && <p className={styles.synopsis}>{plainDescription(entry.description)}</p>}
       {entry.kind === 'tv' ? <div className={styles.episodeArea}>
         <div className={styles.episodeHeading}><h3>本地选集</h3>{seasons.length > 1 ? <select aria-label="选择季" value={season} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((number) => <option key={number} value={number}>第 {number} 季</option>)}</select> : <span>第 {seasons[0]} 季</span>}</div>
         <div className={styles.episodeList}>{episodes.filter((item) => (item.seasonNumber || 1) === season).map((item, index) => <button key={item.id} className={item.id === entry.id ? styles.activeEpisode : ''} onClick={() => onSelect(item.id)} aria-current={item.id === entry.id ? 'true' : undefined}><span className={styles.episodeNumber}>{String(item.episodeNumber || index + 1).padStart(2, '0')}</span><span className={styles.episodeInfo}><strong>{item.episodeTitle || `第 ${item.episodeNumber || index + 1} 集`}</strong><small>{item.id === entry.id ? '正在播放' : percentPlayed(item) >= 98 ? '已看完' : unfinished(item) ? `已观看 ${timeLabel(item.position)}` : sizeLabel(item.bytes)}</small></span>{item.id === entry.id ? <span className={styles.equalizer}><i /><i /><i /></span> : <LibraryIcon name="play" />}</button>)}</div>
-      </div> : <div className={styles.movieStorage}><LibraryIcon name="check" /><div><strong>{isLocalService ? '已保存到本地' : '已保存到服务器片库'}</strong><span>{isLocalService ? '关闭网络后，仍可在这里播放。' : '离线前请先保存视频到设备。'}</span></div></div>}
+      </div> : <div className={styles.movieStorage}><LibraryIcon name="check" /><div><strong>{isLocalService ? '已保存到本地' : '已入库'}</strong></div></div>}
     </aside>
   </div>;
 }
@@ -486,8 +484,7 @@ function ImportDialog({ items, importing, error, onChange, onStart, onClose }: {
 
   return <div className={styles.modalBackdrop} onClick={(event) => { if (event.target === event.currentTarget && !importing) onClose(); }}>
     <div ref={dialog} className={styles.importDialog} role="dialog" aria-modal="true" aria-labelledby="import-title" tabIndex={-1} onKeyDown={onKeyDown}>
-      <div className={styles.dialogHeading}><div><p className={styles.smallEyebrow}>ADD TO YOUR COLLECTION</p><h2 id="import-title">{done ? '已经加入你的片库' : '导入已有视频'}</h2></div><button aria-label="关闭导入窗口" className={styles.closeButton} disabled={importing} onClick={onClose}><LibraryIcon name="close" /></button></div>
-      <p className={styles.importDescription}>{done ? '视频已保存在当前影视库中，可以随时打开观看。' : '确认片名与分类。电视剧使用相同片名，并填写季、集数，就会自动整理在一起。'}</p>
+      <div className={styles.dialogHeading}><div><h2 id="import-title">{done ? '导入完成' : '导入视频'}</h2></div><button aria-label="关闭导入窗口" className={styles.closeButton} disabled={importing} onClick={onClose}><LibraryIcon name="close" /></button></div>
       {error && <p className={styles.errorBanner} role="alert">{error}</p>}
       <div className={styles.importList}>{items.map((item, index) => <div key={`${item.file.name}-${index}`} className={styles.importRow}>
         <div className={styles.importFile}><LibraryIcon name={item.state === 'done' ? 'check' : 'film'} /><span title={item.file.name}>{item.file.name}</span><small>{sizeLabel(item.file.size)}</small></div>
@@ -495,7 +492,7 @@ function ImportDialog({ items, importing, error, onChange, onStart, onClose }: {
         {(item.state === 'uploading' || item.state === 'done') && <div className={styles.importProgress}><div className={styles.progressTrack}><i style={{ width: `${item.progress}%` }} /></div><span>{item.state === 'done' ? '已入库' : `${Math.round(item.progress)}%`}</span></div>}
         {item.error && <p className={styles.importRowError} role="alert">{item.error}</p>}
       </div>)}</div>
-      <div className={styles.dialogFooter}><span>{items.filter((item) => item.state === 'done').length} / {items.length} 个视频已入库</span>{done ? <button className={styles.primaryButton} onClick={onClose}>打开片库<LibraryIcon name="arrow" className={styles.forwardArrow} /></button> : <button className={styles.primaryButton} disabled={importing || items.some((item) => !item.metadata.title.trim())} onClick={onStart}><LibraryIcon name="upload" />{importing ? '正在保存到本地…' : items.some((item) => item.state === 'error') ? '重试未完成的视频' : '确认导入'}</button>}</div>
+      <div className={styles.dialogFooter}><span>{items.filter((item) => item.state === 'done').length} / {items.length} 个视频已入库</span>{done ? <button className={styles.primaryButton} onClick={onClose}>打开片库<LibraryIcon name="arrow" className={styles.forwardArrow} /></button> : <button className={styles.primaryButton} disabled={importing || items.some((item) => !item.metadata.title.trim())} onClick={onStart}><LibraryIcon name="upload" />{importing ? '导入中…' : items.some((item) => item.state === 'error') ? '重试' : '确认导入'}</button>}</div>
     </div>
   </div>;
 }
