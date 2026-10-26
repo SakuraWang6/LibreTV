@@ -11,6 +11,7 @@ import { buildPlaybackSwitchUrl, matchPlaybackEpisode, type PlaybackSelection } 
 import { videoDetailQueryKey } from '@/lib/client-api';
 import { attachTemporaryPlaybackRate } from '@/lib/temporary-playback-rate';
 import { LibraryIcon, episodeLabel, percentPlayed, plainDescription, timeLabel, unfinished } from './library-ui';
+import { LibraryVideoControls, releaseLibraryFullscreen, toggleLibraryFullscreen } from './library-video-controls';
 import styles from './library.module.css';
 
 const SEEK_SECONDS = 5;
@@ -20,6 +21,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const video = useRef<HTMLVideoElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const temporaryRateController = useRef<ReturnType<typeof attachTemporaryPlaybackRate> | null>(null);
   const playback = useRef({ loaded: false, position: 0, duration: 0 });
   const lastSaved = useRef({ position: entry.position || 0, duration: entry.duration || 0, sequence: 0 });
@@ -146,7 +148,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
         else temporaryRateController.current?.endKeyboardHold();
         return;
       }
-      if (event.key.toLowerCase() === 'f') { consume(); if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); else void media.requestFullscreen?.().catch(() => {}); }
+      if (event.key.toLowerCase() === 'f') { consume(); if (!event.repeat && frame.current) void toggleLibraryFullscreen(frame.current); }
     };
     // Capture before native video controls; otherwise one key can be handled twice.
     window.addEventListener('keydown', onKey, true);
@@ -158,7 +160,6 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
     const media = video.current;
     if (!media || unavailable) return;
     const detach = attachTemporaryPlaybackRate(media, media, {
-      ignoreBottom: 56,
       onChange: (active) => setTemporaryRate(active),
     });
     temporaryRateController.current = detach;
@@ -167,6 +168,12 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
       if (temporaryRateController.current === detach) temporaryRateController.current = null;
     };
   }, [entry.id, entry.mediaUrl, unavailable]);
+
+  useEffect(() => {
+    const surface = frame.current;
+    return () => { if (surface) releaseLibraryFullscreen(surface); };
+  }, []);
+  useEffect(() => { if ((unavailable || playError) && frame.current) releaseLibraryFullscreen(frame.current); }, [unavailable, playError]);
 
   const syncPlayback = (element: HTMLVideoElement) => {
     playback.current = { loaded: playback.current.loaded, position: element.currentTime, duration: element.duration };
@@ -186,8 +193,9 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
 
   return <div className={styles.playerLayout}>
     <div className={styles.playerMain}>
-      <div className={styles.videoFrame}>
-        {!unavailable && <video ref={video} className={styles.video} src={entry.mediaUrl} controls autoPlay playsInline preload="metadata" tabIndex={0}
+      <div ref={frame} className={styles.videoFrame}>
+        {!unavailable && <video ref={video} className={styles.video} src={entry.mediaUrl} autoPlay playsInline preload="metadata" tabIndex={0}
+          onClick={(event) => { if (!event.defaultPrevented) { const media = event.currentTarget; if (media.paused) void media.play().catch(() => {}); else media.pause(); } }}
           onLoadedMetadata={(event) => {
             const media = event.currentTarget;
             // Reconnecting an external disk creates a new video element. A
@@ -215,6 +223,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
           }}
           aria-label={`${entry.title} ${entry.kind === 'tv' ? episodeLabel(entry) : ''}`} />}
         {!unavailable && temporaryRate && <div role="status" className="playback-rate-hint">2×</div>}
+        {!unavailable && !playError && <LibraryVideoControls key={`${entry.id}:${entry.mediaUrl}`} libraryId={entry.id} video={video} frame={frame} />}
         {unavailable ? <div className={styles.videoMessage} role="status"><LibraryIcon name="folder" /><p>{unavailableMessage}</p><button type="button" className={styles.secondaryButton} disabled={checkingFile} onClick={() => void checkFile()}>{checkingFile ? '检查中…' : '重新检查'}</button></div>
           : playError && <div className={styles.videoMessage} role="alert"><LibraryIcon name="film" /><p>{playError}</p><a href={downloadUrl} download className={styles.secondaryButton}>保存视频到设备</a></div>}
         {!unavailable && ended && next && <div className={styles.endedMessage}><p>本集已播放完</p><button className={styles.primaryButton} onClick={() => onSelect(next.id)}><LibraryIcon name="next" />播放下一集</button></div>}

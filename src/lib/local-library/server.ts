@@ -686,7 +686,8 @@ function byteRange(header: string | null, size: number): [number, number] | null
   return [start, end];
 }
 
-export async function mediaResponse(id: string, request: Request): Promise<Response> {
+/** Share the media capability with local frame extraction; callers receive no path. */
+export async function openVerifiedLibraryMedia(id: string, request: Request): Promise<{ handle: FileHandle; item: LibraryEntry }> {
   const root = await rootDirectory();
   const manifest = await readManifest(root, id);
   if (manifest.external) requireExternalRequest(request);
@@ -701,15 +702,25 @@ export async function mediaResponse(id: string, request: Request): Promise<Respo
     if (reason === 'unavailable') throw new LibraryError('外部视频暂时不可用，请检查已选择的目录', 404);
     throw error;
   }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new LibraryError('影视库文件不可用', 404);
+    if (manifest.external && stat.size !== manifest.external.bytes) throw new LibraryError('外部视频已改变，请重新扫描并确认文件', 409);
+    return { handle, item: publicItem(manifest) };
+  } catch (error) { await handle.close(); throw error; }
+}
+
+export async function mediaResponse(id: string, request: Request): Promise<Response> {
+  const { handle, item } = await openVerifiedLibraryMedia(id, request);
   let streaming = false;
   try {
     const mediaStat = await handle.stat();
     const { size } = mediaStat;
-    if (manifest.external && (!mediaStat.isFile() || size !== manifest.external.bytes)) throw new LibraryError('外部视频已改变，请重新扫描并确认文件', 409);
-    const headers = new Headers({ 'Content-Type': FORMATS[manifest.item.format][1], 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' });
+    if (item.storage === 'external' && size !== item.bytes) throw new LibraryError('外部视频已改变，请重新扫描并确认文件', 409);
+    const headers = new Headers({ 'Content-Type': FORMATS[item.format][1], 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, no-cache', 'X-Content-Type-Options': 'nosniff' });
     if (new URL(request.url).searchParams.get('download') === '1') {
-      const label = `${filename(manifest.item.title)}.${FORMATS[manifest.item.format][0]}`;
-      headers.set('Content-Disposition', `attachment; filename="video.${FORMATS[manifest.item.format][0]}"; filename*=UTF-8''${encodeURIComponent(label).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`);
+      const label = `${filename(item.title)}.${FORMATS[item.format][0]}`;
+      headers.set('Content-Disposition', `attachment; filename="video.${FORMATS[item.format][0]}"; filename*=UTF-8''${encodeURIComponent(label).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`);
     }
     let range: [number, number] | null;
     try { range = byteRange(request.headers.get('range'), size); }

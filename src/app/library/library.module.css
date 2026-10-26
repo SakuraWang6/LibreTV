@@ -85,3 +85,32 @@
 @media (max-width: 600px) { .importFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.importFields .titleField { grid-column: 1 / -1; }.importFields .numberField, .importFields > label:nth-child(2) { width: auto; } }
 @media (max-width: 420px) { .hero { flex-wrap: wrap; align-items: flex-start; }.heroAside { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; max-width: 100%; } }
 @media (max-width: 600px) { .externalPathRow { grid-template-columns: minmax(0, 1fr); }.externalPathRow input { min-height: 42px; font-size: 16px; }.externalPathRow > button { justify-self: end; }.externalLocation { align-items: flex-start; }.externalFile { gap: 9px; }.externalFile strong { font-size: 12px; } }
+
+/* Library video controls share the picture's fullscreen surface. */
+.videoFrame:fullscreen, .videoFrame[data-fullscreen='true'] { width: 100vw; height: 100dvh; aspect-ratio: auto; margin: 0; border-radius: 0; background: #000; }
+.videoFrame[data-fullscreen='true'] { position: fixed; inset: 0; z-index: 1000; }
+.videoControls { position: absolute; z-index: 4; inset: auto 0 0; padding: 23px 13px max(8px, env(safe-area-inset-bottom)); color: #f7f7f8; background: linear-gradient(transparent, #000b 45%, #000d); font-variant-numeric: tabular-nums; }
+.seekRail { position: relative; height: 24px; display: flex; align-items: center; touch-action: none; }
+.seekInput { display: block; width: 100%; height: 24px; padding: 0; margin: 0; border: 0; appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer; }
+.seekInput::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, #f7f7f8 0 var(--played), #ffffff55 var(--played) var(--buffered), #ffffff26 var(--buffered) 100%); }
+.seekInput::-moz-range-track { height: 3px; border-radius: 2px; background: linear-gradient(to right, #f7f7f8 0 var(--played), #ffffff55 var(--played) var(--buffered), #ffffff26 var(--buffered) 100%); }
+.seekInput::-webkit-slider-thumb { margin-top: -3.5px; width: 10px; height: 10px; border: 0; border-radius: 50%; background: #fff; appearance: none; -webkit-appearance: none; }
+.seekInput::-moz-range-thumb { width: 10px; height: 10px; border: 0; border-radius: 50%; background: #fff; }
+.seekInput:disabled { opacity: .4; cursor: default; }
+.seekPreview { position: absolute; bottom: 28px; transform: translateX(-50%); overflow: hidden; width: 166px; padding: 3px; border: 1px solid #ffffff25; border-radius: 6px; background: #161619ed; box-shadow: 0 5px 22px #0008; text-align: center; pointer-events: none; }
+.seekPreview img { display: block; width: 160px; height: 90px; object-fit: contain; border-radius: 3px; background: #000; }
+.seekPreview span { display: block; padding: 5px 0 3px; font-size: 11px; color: #fff; }
+.seekPreview:not(:has(img)) { width: auto; min-width: 53px; padding: 1px 6px; }
+.controlButtons { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.controlButton { display: inline-grid; flex-shrink: 0; place-items: center; width: 33px; height: 34px; border-radius: 5px; color: #f7f7f8; background: transparent; }
+.controlButton:hover { background: #ffffff1c; }
+.controlButton:disabled { opacity: .4; }
+.controlTime { font-size: 11px; white-space: nowrap; }
+.controlTime > span { color: #ffffff8c; }
+.controlSpacer { flex: 1; min-width: 0; }
+.volumeInput { width: 58px; height: 3px; padding: 0; border: 0; accent-color: #f7f7f8; }
+.rateSelect { width: 52px; min-height: 30px; padding: 2px 0 2px 4px; border: 0; border-radius: 4px; background: transparent; color: #f7f7f8; font-size: 11px; cursor: pointer; }
+.rateSelect option { background: #202024; color: #fff; }
+.videoFrame .endedMessage { bottom: 74px; }
+@media (max-width: 600px), (pointer: coarse) { .volumeInput { display: none; }.videoControls { padding-left: 10px; padding-right: 10px; }.controlButtons { gap: 3px; }.controlButton { width: 30px; min-height: 36px; }.rateSelect { width: 48px; } }
+@media (max-width: 380px) { .controlButtons { gap: 1px; }.controlButton { width: 27px; }.controlTime { font-size: 10px; }.rateSelect { width: 43px; padding-left: 1px; } }

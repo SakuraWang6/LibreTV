@@ -16,6 +16,7 @@ import { loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
 import { attachTemporaryPlaybackRate } from '@/lib/temporary-playback-rate';
+import { attachSeekPreviewPopover, type SeekPreviewPopover } from '@/lib/seek-preview-client';
 import {
   findActiveSegment,
   findCrossedEnding,
@@ -131,6 +132,7 @@ export function PlayerShell({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artRef = useRef<any>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const seekPreviewRef = useRef<SeekPreviewPopover | null>(null);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
   // 起播前的品牌占位图（沿用旧版 nomedia 素材），实际开始播放后隐藏
@@ -352,6 +354,7 @@ export function PlayerShell({
     restoreCleanupRef.current = null;
     hlsRef.current?.destroy();
     currentMediaUrlRef.current = mediaUrl;
+    seekPreviewRef.current?.setSource({ url: mediaUrl, blockAd: propsRef.current.adFilter });
     hlsRef.current = null;
 
     let restoreInFlight = false;
@@ -578,6 +581,9 @@ export function PlayerShell({
       },
     });
     artRef.current = art;
+    const seekPreview = attachSeekPreviewPopover(art.template.$player, art.template.$progress,
+      () => art.duration, { url: currentMediaUrlRef.current, blockAd: propsRef.current.adFilter });
+    seekPreviewRef.current = seekPreview;
 
     // 进度条区间可视化：初始渲染一次，换集 duration 变化时重绘
     renderSkipMarks();
@@ -892,6 +898,8 @@ export function PlayerShell({
         } catch { /* 忽略 */ }
       }
       detachTemporaryRate();
+      seekPreview.dispose();
+      if (seekPreviewRef.current === seekPreview) seekPreviewRef.current = null;
       document.removeEventListener('keydown', shortcuts, true);
       document.removeEventListener('visibilitychange', saveOnHide);
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
