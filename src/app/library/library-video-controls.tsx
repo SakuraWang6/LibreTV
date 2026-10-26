@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type RefObject } from 'react';
 import { formatTime } from '@/lib/utils';
 import { createLibraryPreviewClient } from './library-preview-client';
+import { createControlAutoHide } from './library-control-visibility';
 import styles from './library.module.css';
 
 const fullscreenOverflow = new WeakMap<HTMLElement, string>();
@@ -85,6 +86,7 @@ export function LibraryVideoControls({ libraryId, video, frame }: { libraryId: s
   const [hover, setHover] = useState<Hover>();
   const [imageFailed, setImageFailed] = useState(false);
   const rail = useRef<HTMLDivElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const preview = usePreview(libraryId, hover?.bucket);
   useEffect(() => setImageFailed(false), [preview]);
@@ -136,6 +138,99 @@ export function LibraryVideoControls({ libraryId, video, frame }: { libraryId: s
     };
   }, [video, frame, libraryId]);
 
+  useEffect(() => {
+    const media = video.current;
+    const surface = frame.current;
+    const panel = controls.current;
+    if (!media || !surface || !panel) return;
+    const document = surface.ownerDocument;
+    const window = document.defaultView;
+    let keyboardFocus = false;
+    let windowActive = true;
+    const idle = createControlAutoHide((visible) => {
+      if (visible) delete surface.dataset.controlsHidden;
+      else surface.dataset.controlsHidden = 'true';
+    });
+    const focus = () => idle.hold('focus', windowActive && keyboardFocus && panel.contains(document.activeElement));
+    const activity = () => idle.activity();
+    const pointerActivity = (event: globalThis.PointerEvent) => {
+      idle.activity();
+      if (event.pointerType === 'mouse') {
+        const bounds = panel.getBoundingClientRect();
+        idle.hold('hover', event.clientX >= bounds.left && event.clientX <= bounds.right && event.clientY >= bounds.top && event.clientY <= bounds.bottom);
+      }
+    };
+    const playback = () => idle.setPaused(media.paused || media.ended);
+    const pointerMode = () => { keyboardFocus = false; focus(); };
+    const down = (event: globalThis.PointerEvent) => {
+      idle.activity();
+      if (panel.contains(event.target as Node)) idle.hold('pointer', true);
+    };
+    const enter = (event: globalThis.PointerEvent) => { if (event.pointerType === 'mouse') idle.hold('hover', true); };
+    const leave = () => idle.hold('hover', false);
+    const release = (event: globalThis.PointerEvent) => {
+      idle.hold('pointer', false);
+      const bounds = panel.getBoundingClientRect();
+      if (event.type === 'pointercancel' || event.pointerType !== 'mouse' || event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) leave();
+    };
+    const key = (event: globalThis.KeyboardEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (event.key === 'Tab' || panel.contains(target)) keyboardFocus = true;
+      if (surface.contains(target) || panel.contains(document.activeElement)) { focus(); idle.activity(); }
+    };
+    const focusOut = () => queueMicrotask(focus);
+    const blur = () => { windowActive = false; idle.hold('pointer', false); leave(); focus(); idle.activity(); };
+    const resume = () => { windowActive = true; focus(); idle.activity(); };
+    const visibility = () => idle.hold('hidden', document.visibilityState === 'hidden');
+    const waiting = () => idle.hold('waiting', true);
+    const ready = () => idle.hold('waiting', false);
+    surface.addEventListener('pointermove', pointerActivity);
+    surface.addEventListener('pointerdown', down);
+    surface.addEventListener(FULLSCREEN_EVENT, activity);
+    panel.addEventListener('pointerenter', enter);
+    panel.addEventListener('pointerleave', leave);
+    panel.addEventListener('focusin', focus);
+    panel.addEventListener('focusout', focusOut);
+    document.addEventListener('pointerdown', pointerMode, true);
+    document.addEventListener('pointerup', release);
+    document.addEventListener('pointercancel', release);
+    document.addEventListener('fullscreenchange', activity);
+    document.addEventListener('visibilitychange', visibility);
+    window?.addEventListener('keydown', key, true);
+    window?.addEventListener('blur', blur);
+    window?.addEventListener('focus', resume);
+    for (const event of ['play', 'pause', 'ended'] as const) media.addEventListener(event, playback);
+    media.addEventListener('seeking', activity);
+    media.addEventListener('waiting', waiting);
+    media.addEventListener('playing', ready);
+    media.addEventListener('canplay', ready);
+    playback(); visibility();
+    return () => {
+      idle.dispose();
+      delete surface.dataset.controlsHidden;
+      surface.removeEventListener('pointermove', pointerActivity);
+      surface.removeEventListener('pointerdown', down);
+      surface.removeEventListener(FULLSCREEN_EVENT, activity);
+      panel.removeEventListener('pointerenter', enter);
+      panel.removeEventListener('pointerleave', leave);
+      panel.removeEventListener('focusin', focus);
+      panel.removeEventListener('focusout', focusOut);
+      document.removeEventListener('pointerdown', pointerMode, true);
+      document.removeEventListener('pointerup', release);
+      document.removeEventListener('pointercancel', release);
+      document.removeEventListener('fullscreenchange', activity);
+      document.removeEventListener('visibilitychange', visibility);
+      window?.removeEventListener('keydown', key, true);
+      window?.removeEventListener('blur', blur);
+      window?.removeEventListener('focus', resume);
+      for (const event of ['play', 'pause', 'ended'] as const) media.removeEventListener(event, playback);
+      media.removeEventListener('seeking', activity);
+      media.removeEventListener('waiting', waiting);
+      media.removeEventListener('playing', ready);
+      media.removeEventListener('canplay', ready);
+    };
+  }, [video, frame, libraryId]);
+
   const seek = (position: number) => {
     const media = video.current;
     if (media && state.duration > 0) media.currentTime = Math.max(0, Math.min(state.duration, position));
@@ -160,7 +255,7 @@ export function LibraryVideoControls({ libraryId, video, frame }: { libraryId: s
   const buffered = state.duration > 0 ? Math.min(100, state.buffered / state.duration * 100) : 0;
   const rates = [...new Set([0.5, 0.75, 1, 1.25, 1.5, 2, 3, state.rate])].sort((a, b) => a - b);
 
-  return <div className={styles.videoControls} data-paused={state.paused} role="group" aria-label="播放控制">
+  return <div ref={controls} className={styles.videoControls} data-paused={state.paused} role="group" aria-label="播放控制">
     <div ref={rail} className={styles.seekRail} onPointerMove={showPreview} onPointerDown={(event) => { dragging.current = true; showPreview(event); }} onPointerLeave={() => { if (!dragging.current) setHover(undefined); }}>
       <input type="range" min={0} max={state.duration || 1} step={0.1} value={Math.min(state.position, state.duration || 0)} disabled={!state.duration}
         className={styles.seekInput} style={{ '--played': `${progress}%`, '--buffered': `${buffered}%` } as CSSProperties}

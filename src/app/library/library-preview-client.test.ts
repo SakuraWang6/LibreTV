@@ -29,7 +29,7 @@ describe('library thumbnail requests', () => {
     vi.stubGlobal('fetch', fetcher);
     const client = createLibraryPreviewClient('movie');
     const pending = client.get(10);
-    await vi.advanceTimersByTimeAsync(650);
+    await vi.advanceTimersByTimeAsync(750);
     expect(await pending).toBe('blob:preview-1');
     expect(fetcher).toHaveBeenCalledTimes(2);
     client.dispose();
@@ -42,22 +42,57 @@ describe('library thumbnail requests', () => {
     const pending = client.get(10);
     await vi.runAllTimersAsync();
     expect(await pending).toBeUndefined();
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(8);
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     client.dispose();
   });
 
-  it('cancels a pending retry when the hover moves away', async () => {
-    const fetcher = vi.fn().mockImplementation(() => new Response(null, { status: 503 }));
+  it('continues a shared frame when a caller leaves, then reuses its cached result', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(null, { status: 503 })).mockImplementation(jpeg);
     vi.stubGlobal('fetch', fetcher);
     const client = createLibraryPreviewClient('movie');
     const controller = new AbortController();
     const pending = client.get(10, controller.signal);
     await vi.advanceTimersByTimeAsync(100);
     controller.abort();
-    await vi.runAllTimersAsync();
     expect(await pending).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await client.get(10)).toBe('blob:preview-1');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    client.dispose();
+  });
+
+  it('waits beyond the old retry window for a busy extractor', async () => {
+    let calls = 0;
+    const fetcher = vi.fn().mockImplementation(() => ++calls <= 4
+      ? new Response(null, { status: 503, headers: { 'retry-after': '1' } }) : jpeg());
+    vi.stubGlobal('fetch', fetcher);
+    const client = createLibraryPreviewClient('movie');
+    const pending = client.get(20);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(await pending).toBe('blob:preview-1');
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    client.dispose();
+  });
+
+  it('serializes rapid hover changes and skips positions whose caller already moved away', async () => {
+    let finishFirst: (response: Response) => void = () => {};
+    const fetcher = vi.fn().mockImplementationOnce(() => new Promise<Response>((resolve) => { finishFirst = resolve; })).mockImplementation(jpeg);
+    vi.stubGlobal('fetch', fetcher);
+    const client = createLibraryPreviewClient('movie');
+    const firstSignal = new AbortController();
+    const middleSignal = new AbortController();
+    const first = client.get(0, firstSignal.signal);
+    firstSignal.abort();
+    const middle = client.get(50, middleSignal.signal);
+    middleSignal.abort();
+    const latest = client.get(100);
     expect(fetcher).toHaveBeenCalledTimes(1);
+    finishFirst(jpeg());
+    expect(await first).toBeUndefined();
+    expect(await middle).toBeUndefined();
+    expect(await latest).toBe('blob:preview-2');
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/library/movie/preview?time=0', '/api/library/movie/preview?time=100']);
     client.dispose();
   });
 

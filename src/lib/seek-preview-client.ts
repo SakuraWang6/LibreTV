@@ -198,6 +198,7 @@ export function createSeekPreviewClient(source: SeekPreviewSource): SeekPreviewC
 }
 
 export interface SeekPreviewPopover {
+  hide(): void;
   setSource(source: SeekPreviewSource): void;
   dispose(): void;
 }
@@ -276,6 +277,7 @@ export function attachSeekPreviewPopover(surface: HTMLElement, progress: HTMLEle
   doc.addEventListener('visibilitychange', hidden);
   doc.defaultView?.addEventListener('blur', hide);
   return {
+    hide,
     setSource(next) {
       if (next.url === source.url && next.blockAd === source.blockAd) return;
       hide();

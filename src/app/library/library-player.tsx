@@ -22,6 +22,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
   const { toast } = useToast();
   const video = useRef<HTMLVideoElement>(null);
   const frame = useRef<HTMLDivElement>(null);
+  const revealTouchClick = useRef(false);
   const temporaryRateController = useRef<ReturnType<typeof attachTemporaryPlaybackRate> | null>(null);
   const playback = useRef({ loaded: false, position: 0, duration: 0 });
   const lastSaved = useRef({ position: entry.position || 0, duration: entry.duration || 0, sequence: 0 });
@@ -195,7 +196,11 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
     <div className={styles.playerMain}>
       <div ref={frame} className={styles.videoFrame}>
         {!unavailable && <video ref={video} className={styles.video} src={entry.mediaUrl} autoPlay playsInline preload="metadata" tabIndex={0}
-          onClick={(event) => { if (!event.defaultPrevented) { const media = event.currentTarget; if (media.paused) void media.play().catch(() => {}); else media.pause(); } }}
+          onPointerDownCapture={(event) => { revealTouchClick.current = event.pointerType !== 'mouse' && frame.current?.dataset.controlsHidden === 'true'; }}
+          onClick={(event) => {
+            if (revealTouchClick.current) { revealTouchClick.current = false; return; }
+            if (!event.defaultPrevented) { const media = event.currentTarget; if (media.paused) void media.play().catch(() => {}); else media.pause(); }
+          }}
           onLoadedMetadata={(event) => {
             const media = event.currentTarget;
             // Reconnecting an external disk creates a new video element. A

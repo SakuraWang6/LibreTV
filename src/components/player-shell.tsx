@@ -103,6 +103,34 @@ interface PlayerShellProps {
   hasNextEpisode?: boolean;
 }
 
+/** Reuse ArtPlayer's idle clock and cursor classes; preserve active controls. */
+export function keepArtplayerControlsAccessible(art: Artplayer, hidePreview: () => void): () => void {
+  const surface = art.template.$player;
+  const video = art.template.$video;
+  const show = () => { art.controls.show = true; };
+  const onControl = (visible: unknown) => {
+    if (visible !== false) return;
+    const focused = surface.ownerDocument.activeElement;
+    const controlFocused = focused && focused !== surface && focused !== video && surface.contains(focused);
+    if (video.paused || video.ended || art.setting.show || controlFocused) {
+      show();
+      return;
+    }
+    hidePreview();
+  };
+  art.on('control', onControl);
+  art.on('video:pause', show);
+  art.on('video:ended', show);
+  surface.addEventListener('focusin', show);
+  if (video.paused || video.ended) show();
+  return () => {
+    art.off('control', onControl);
+    art.off('video:pause', show);
+    art.off('video:ended', show);
+    surface.removeEventListener('focusin', show);
+  };
+}
+
 export function PlayerShell({
   url,
   title,
@@ -507,7 +535,7 @@ export function PlayerShell({
   useEffect(() => {
     if (!containerRef.current || !propsRef.current.url) return;
     const initialUrl = propsRef.current.url;
-    // ArtPlayer 默认 3 秒才隐藏控制栏；桌面失去鼠标悬停后缩短为 0.8 秒。
+    // ArtPlayer 自带闲置计时与鼠标隐藏；桌面统一为 2.5 秒，不叠加第二套计时器。
     // 触屏没有 hover，自动隐藏会让按钮来不及点（issue #937）：改为常驻，
     // 由「点按视频 toggle」收起。CONTROL_HIDE_TIME 是 static，创建后修改立即生效。
     const touchPointer = prefersTouchPointer();
@@ -584,6 +612,7 @@ export function PlayerShell({
     const seekPreview = attachSeekPreviewPopover(art.template.$player, art.template.$progress,
       () => art.duration, { url: currentMediaUrlRef.current, blockAd: propsRef.current.adFilter });
     seekPreviewRef.current = seekPreview;
+    const detachControlVisibility = keepArtplayerControlsAccessible(art, () => seekPreview.hide());
 
     // 进度条区间可视化：初始渲染一次，换集 duration 变化时重绘
     renderSkipMarks();
@@ -852,30 +881,6 @@ export function PlayerShell({
       onChange: (active, originalRate) => showHint(active ? '2 倍速' : `${originalRate} 倍速`),
     });
 
-    // 全屏时播放器覆盖整个视口，无法依赖 mouseleave 判断“移出播放器”。
-    // 改为按鼠标活动计时：停止移动后快速收起控制栏，移动时立即显示。
-    let controlHideTimer: ReturnType<typeof setTimeout> | null = null;
-    const showControlsOnPointerMove = () => {
-      art.controls.show = true;
-      if (controlHideTimer) clearTimeout(controlHideTimer);
-      controlHideTimer = setTimeout(() => {
-        if (!art.setting.show) art.controls.show = false;
-      }, 800);
-    };
-    const hideControlsOnMouseLeave = () => {
-      if (controlHideTimer) clearTimeout(controlHideTimer);
-      controlHideTimer = null;
-      art.controls.show = false;
-    };
-    // 触屏不监听 mousemove/mouseleave，也跳过初始显示：iOS 点按视频的合成事件
-    // 序列是 mousemove → click，若 mousemove 先把 show 置 true，紧跟的 ArtPlayer
-    // click toggle 会把它翻回 false——控制栏「闪一下即隐」，正是 issue #937 的病灶
-    if (!touchPointer) {
-      el?.addEventListener('mousemove', showControlsOnPointerMove);
-      el?.addEventListener('mouseleave', hideControlsOnMouseLeave);
-      showControlsOnPointerMove();
-    }
-
     // ArtPlayer 的 contextmenu 组件只在桌面端初始化（移动端构造函数里跳过 init），
     // 长按倍速因而会连带呼出系统原生菜单/气泡。播放器表面没有可用的原生菜单，统一抑制
     const onContextMenu = (e: Event) => e.preventDefault();
@@ -898,6 +903,7 @@ export function PlayerShell({
         } catch { /* 忽略 */ }
       }
       detachTemporaryRate();
+      detachControlVisibility();
       seekPreview.dispose();
       if (seekPreviewRef.current === seekPreview) seekPreviewRef.current = null;
       document.removeEventListener('keydown', shortcuts, true);
@@ -906,9 +912,6 @@ export function PlayerShell({
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       el?.removeEventListener('contextmenu', onContextMenu);
       art.video?.removeEventListener('resize', reportVideoHeight);
-      el?.removeEventListener('mousemove', showControlsOnPointerMove);
-      el?.removeEventListener('mouseleave', hideControlsOnMouseLeave);
-      if (controlHideTimer) clearTimeout(controlHideTimer);
       restoreCleanupRef.current?.();
       restoreCleanupRef.current = null;
       Artplayer.CONTROL_HIDE_TIME = ART_DEFAULT_CONTROL_HIDE_MS;

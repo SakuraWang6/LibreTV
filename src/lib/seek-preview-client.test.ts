@@ -193,6 +193,24 @@ describe('isolated seek preview frames', () => {
 });
 
 describe('ArtPlayer progress preview popover', () => {
+  it('can hide an active popover when native controls disappear, cancelling its pending request', async () => {
+    vi.useFakeTimers(); mode = 'stall';
+    const surface = new FakeElement(); const progress = new FakeElement();
+    const handle = attachSeekPreviewPopover(surface as unknown as HTMLElement, progress as unknown as HTMLElement, () => 120, { url: 'https://cdn.example/a.mp4' });
+    detachments.push(() => handle.dispose());
+    hover(progress, 100);
+    await vi.advanceTimersByTimeAsync(180);
+    expect(videos).toHaveLength(1);
+    handle.hide();
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(surface.children[0].style.display).toBe('none');
+    expect(videos[0].src).toBe('');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    mode = 'normal';
+    hover(progress, 100);
+    await vi.advanceTimersByTimeAsync(180);
+    expect(surface.children[0].children[0].src).toBe('blob:preview-1');
+  });
   it('debounces hover, leaves seeking events untouched, and disposes old frames on a source switch', async () => {
     vi.useFakeTimers();
     const surface = new FakeElement(); const progress = new FakeElement();

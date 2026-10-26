@@ -7,8 +7,8 @@
  * 本应用是唯一写入方，库默认值即安全基准。
  */
 export const ART_DEFAULT_CONTROL_HIDE_MS = 3000;
-/** 桌面：鼠标停止移动 / 离开播放器后快速收起 */
-export const DESKTOP_CONTROL_HIDE_MS = 800;
+/** 桌面：停止操作约 2.5 秒后收起，给控制栏操作留出时间。 */
+export const DESKTOP_CONTROL_HIDE_MS = 2500;
 /**
  * 触屏：永不自动隐藏（issue LibreSpark/LibreTV#937）。
  * ArtPlayer 的判定是 `Date.now() - timer >= CONTROL_HIDE_TIME`，该差值是毫秒级，

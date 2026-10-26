@@ -11,8 +11,8 @@ describe('控制栏隐藏策略', () => {
     expect(ART_DEFAULT_CONTROL_HIDE_MS).toBe(Artplayer.CONTROL_HIDE_TIME);
   });
 
-  it('桌面收紧到 800ms，快于库默认', () => {
-    expect(DESKTOP_CONTROL_HIDE_MS).toBe(800);
+  it('桌面控制栏与库内播放器统一为 2.5 秒', () => {
+    expect(DESKTOP_CONTROL_HIDE_MS).toBe(2500);
     expect(DESKTOP_CONTROL_HIDE_MS).toBeLessThan(ART_DEFAULT_CONTROL_HIDE_MS);
   });
 
