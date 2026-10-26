@@ -71,7 +71,6 @@ export function QualityBadge({
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
           'tag font-medium shrink-0 bg-warning/15 text-warning hover:bg-warning/25 transition-colors',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40',
           className
         )}
         title={view.title}

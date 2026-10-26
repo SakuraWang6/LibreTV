@@ -175,7 +175,7 @@ function HomeContent() {
                 runSearch(input);
               }}
             >
-              {/* 输入框与搜索按钮合并为一个胶囊：内部无边框，焦点态由容器统一表达；
+              {/* 输入框与搜索按钮合并为一个胶囊：内部无边框；
                   下拉展开时改为「上圆下直」并隐去底边，与下方浮层拼成同一个面板 */}
               <div
                 className={cn(
@@ -185,15 +185,14 @@ function HomeContent() {
                   'flex items-stretch min-h-12 pl-4 border',
                   'transition-[background-color,border-color,border-radius] duration-200',
                   searchHistory.visible
-                    ? // 展开时：外框（含上圆角）沿用输入框的聚焦样式不变，只把底边改为内部分隔线，
-                      // 使输入区在展开状态下仍是边界清晰的独立输入框，而非与列表糊成一片
-                      'rounded-t-xl rounded-b-none border-accent border-b-line bg-surface-raised'
-                    : 'rounded-xl border-line bg-chip focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/40'
+                    ? // 展开时保留上圆角，以中性分隔线衔接下方列表。
+                      'rounded-t-xl rounded-b-none border-line bg-surface-raised'
+                    : 'rounded-xl border-line bg-chip'
                 )}
               >
                 <input
                   ref={inputRef}
-                  className="flex-1 min-w-0 pr-2 bg-transparent text-sm text-content placeholder:text-faint focus:outline-none"
+                  className="flex-1 min-w-0 pr-2 bg-transparent text-sm text-content placeholder:text-faint"
                   placeholder="搜索电影、电视剧"
                   value={input}
                   maxLength={100}

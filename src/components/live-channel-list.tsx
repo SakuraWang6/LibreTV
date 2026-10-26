@@ -462,7 +462,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
         data-channel-list
         tabIndex={0}
         onKeyDown={onListKeyDown}
-        className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-2 pb-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-2 pb-2"
       >
         {filtered.length === 0 ? (
           <EmptyState

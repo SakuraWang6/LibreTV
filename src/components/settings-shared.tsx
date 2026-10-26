@@ -101,7 +101,6 @@ export function Switch({
       title={title ?? label}
       className={cn(
         'relative h-[22px] w-10 shrink-0 rounded-full transition-colors duration-200',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         checked ? 'bg-accent' : 'bg-chip ring-1 ring-inset ring-line'
       )}
       onClick={() => onChange(!checked)}

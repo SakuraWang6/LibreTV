@@ -100,11 +100,7 @@ export function Dropdown({
         aria-label={ariaLabel}
         onClick={toggle}
         onKeyDown={onKeyDown}
-        className={cn(
-          'input flex items-center justify-between gap-1.5 cursor-pointer text-left',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:border-accent',
-          open && 'border-accent'
-        )}
+        className="input flex items-center justify-between gap-1.5 cursor-pointer text-left"
       >
         <span className="truncate">{selected?.label ?? value}</span>
         <Icon

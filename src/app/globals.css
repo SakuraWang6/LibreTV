@@ -79,8 +79,6 @@ body {
   }
   .btn {
     @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
-    /* 统一焦点环：键盘用户可见，与 .input 同一规格 */
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40;
   }
   .btn-primary {
     @apply btn bg-accent text-on-accent hover:bg-accent-hover;
@@ -90,7 +88,6 @@ body {
   }
   .input {
     @apply bg-chip border border-line rounded-md px-3 py-2 text-sm text-content placeholder:text-faint;
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:border-accent;
   }
   .tag {
     @apply inline-flex items-center text-xs px-1.5 py-0.5 rounded-full;
@@ -186,7 +183,7 @@ body {
 .mac-sidebar-bottom { border-top: 1px solid #d7d8df; padding-top: 10px; margin-top: 20px; }.mac-about { display: inline-block; font-size: 10px; color: #93939c; padding: 8px 11px 0; }
 .mac-appbar { position: sticky; top: 0; z-index: 40; height: 58px; margin-left: 212px; padding: 0 27px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid rgb(var(--c-line) / .8); background: rgb(var(--c-page) / .83); backdrop-filter: blur(24px) saturate(1.4); }
 .mac-toolbar-leading { display: flex; align-items: center; gap: 12px; min-width: 0; }.mac-toolbar-title { font-size: 13px; font-weight: 600; white-space: nowrap; }.mac-toolbar-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }.mac-toolbar-actions > button, .mac-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 6px; border-radius: 6px; color: rgb(var(--c-muted)); }.mac-toolbar-actions > button:hover, .mac-icon-button:hover { background: rgb(var(--c-hover) / .7); }.mac-toolbar-actions svg, .mac-icon-button svg { width: 17px; height: 17px; }
-.mac-sidebar-toggle { display: none; }.mac-toolbar-search { width: min(300px, 40%); }.mac-toolbar-search > div { display: flex; align-items: center; gap: 6px; }.mac-toolbar-search > div > svg { position: absolute; z-index: 1; left: 9px; width: 14px; height: 14px; color: rgb(var(--c-faint)); }.mac-toolbar-search input { width: 100%; min-width: 0; border: 1px solid rgb(var(--c-line)); border-radius: 7px; background: rgb(var(--c-surface-raised) / .6); padding: 6px 8px 6px 29px; font-size: 11px; outline: none; }.mac-toolbar-search input:focus { border-color: rgb(var(--c-accent) / .5); box-shadow: 0 0 0 3px rgb(var(--c-accent) / .1); }
+.mac-sidebar-toggle { display: none; }.mac-toolbar-search { width: min(300px, 40%); }.mac-toolbar-search > div { display: flex; align-items: center; gap: 6px; }.mac-toolbar-search > div > svg { position: absolute; z-index: 1; left: 9px; width: 14px; height: 14px; color: rgb(var(--c-faint)); }.mac-toolbar-search input { width: 100%; min-width: 0; border: 1px solid rgb(var(--c-line)); border-radius: 7px; background: rgb(var(--c-surface-raised) / .6); padding: 6px 8px 6px 29px; font-size: 11px; outline: none; }.mac-toolbar-search input:focus { border-color: rgb(var(--c-muted) / .5); }
 .mac-appbar ~ main { margin-left: 212px; width: calc(100% - 212px); max-width: none; }.mac-appbar ~ footer { margin-left: 212px; }.mac-sidebar-overlay { display: none; }
 .mac-discover { padding: 32px 36px 45px; }.mac-discover-search { align-items: flex-start; margin: 0 0 30px; }.mac-discover-search h1 { font-size: 25px; font-weight: 650; margin-bottom: 20px; letter-spacing: -.7px; }.mac-discover-search > div { max-width: 620px; }.mac-discover-search form > div { min-height: 40px; border-radius: 8px; background: rgb(var(--c-surface-raised)); }.mac-discover-search button[type=submit] { border-radius: 0 7px 7px 0 !important; font-size: 12px; }.mac-discover-search input { font-size: 12px; }.mac-discover > section[aria-label] > div:first-child { margin-bottom: 18px; }
 .dark .mac-sidebar { background: rgb(43 43 47 / .92); border-color: #424247; color: #e5e5ec; }.dark .mac-brand strong, .dark .mac-nav-item { color: #d2d2db; }.dark .mac-nav-item svg { color: #a2a2af; }.dark .mac-nav-item:hover { background: #ffffff07; }.dark .mac-nav-item.is-active { background: #37689f80; color: #fff; }.dark .mac-nav-item.is-active svg { color: #8dc2ff; }.dark .mac-sidebar-bottom { border-color: #45454d; }
@@ -203,3 +200,12 @@ body {
 }
 
 @media (max-width: 760px) { .mac-sidebar:not(.is-open) { visibility: hidden; } }
+
+/* Pointer focus stays quiet; keyboard navigation uses a thin neutral marker. */
+:where(button, a, input, textarea, select, summary, [tabindex]):focus { outline: none; }
+:is(button, a, summary, [tabindex]):focus-visible { outline: 1px solid rgb(var(--c-muted)); outline-offset: 2px; }
+:is(input, textarea, select):focus { outline: none; border-color: rgb(var(--c-muted) / .5); }
+:is(input, textarea, select):focus-visible { outline: none; }
+[tabindex="-1"]:focus-visible { outline: none; }
+:is(video, .art-video-player):focus, :is(video, .art-video-player):focus-visible { outline: none; box-shadow: none; }
+.playback-rate-hint { position: absolute; z-index: 3; top: 16px; left: 50%; transform: translateX(-50%); pointer-events: none; padding: 5px 11px; border-radius: 99px; color: white; background: #0009; font-size: 12px; }

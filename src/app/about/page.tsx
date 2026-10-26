@@ -24,7 +24,7 @@ export default function AboutPage() {
             <li><code className="text-accent">↑</code> / <code className="text-accent">↓</code> 音量调节</li>
             <li><code className="text-accent">F</code> 切换全屏</li>
             <li><code className="text-accent">Alt + ←/→</code> 上一集 / 下一集</li>
-            <li>移动端长按视频可 3 倍速播放</li>
+            <li>长按视频临时 2 倍速，松开恢复原速</li>
           </ul>
         </section>
 

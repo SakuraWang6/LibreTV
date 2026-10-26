@@ -9,14 +9,18 @@ import { PlaybackSourcePicker } from '@/components/switch-source';
 import { useToast } from '@/components/toast';
 import { buildPlaybackSwitchUrl, matchPlaybackEpisode, type PlaybackSelection } from '@/lib/playback-source';
 import { videoDetailQueryKey } from '@/lib/client-api';
+import { attachTemporaryPlaybackRate } from '@/lib/temporary-playback-rate';
 import { LibraryIcon, episodeLabel, percentPlayed, plainDescription, timeLabel, unfinished } from './library-ui';
 import styles from './library.module.css';
+
+const SEEK_SECONDS = 5;
 
 export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh }: { entry: LibraryEntry; episodes: LibraryEntry[]; onSelect: (id: string) => void; onProgress: (id: string, position: number, duration: number) => void; onRefresh: () => Promise<void> }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const video = useRef<HTMLVideoElement>(null);
+  const temporaryRateController = useRef<ReturnType<typeof attachTemporaryPlaybackRate> | null>(null);
   const playback = useRef({ loaded: false, position: 0, duration: 0 });
   const lastSaved = useRef({ position: entry.position || 0, duration: entry.duration || 0, sequence: 0 });
   const confirmedProgressVersion = useRef(entry.lastPlayedAt);
@@ -29,6 +33,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
   const [ended, setEnded] = useState(false);
   const [season, setSeason] = useState(entry.seasonNumber || 1);
   const [checkingFile, setCheckingFile] = useState(false);
+  const [temporaryRate, setTemporaryRate] = useState(false);
   const checking = useRef(false);
   const unavailable = entry.available === false;
   const unavailableMessage = entry.availabilityReason === 'offline' ? '硬盘未连接'
@@ -123,7 +128,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.ctrlKey || event.metaKey || target?.closest('input, select, textarea, button, a, [contenteditable="true"]')) return;
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || target?.closest('input, select, textarea, button, a, [contenteditable="true"]')) return;
       const media = video.current;
       if (!media) return;
       const consume = () => { event.preventDefault(); event.stopPropagation(); };
@@ -131,13 +136,37 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
       if (event.altKey && event.key === 'ArrowLeft' && previous) { consume(); onSelect(previous.id); return; }
       if (event.altKey) return;
       if (event.code === 'Space') { consume(); if (!event.repeat) { if (media.paused) void media.play().catch(() => {}); else media.pause(); } }
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { consume(); media.currentTime = Math.max(0, Math.min(media.duration || Infinity, media.currentTime + (event.key === 'ArrowRight' ? 5 : -5))); }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        consume();
+        if (event.repeat) return;
+        if (Number.isFinite(media.duration) && media.duration > 0) {
+          media.currentTime = Math.max(0, Math.min(media.duration, media.currentTime + (event.key === 'ArrowRight' ? SEEK_SECONDS : -SEEK_SECONDS)));
+        }
+        if (event.key === 'ArrowRight') temporaryRateController.current?.beginKeyboardHold();
+        else temporaryRateController.current?.endKeyboardHold();
+        return;
+      }
       if (event.key.toLowerCase() === 'f') { consume(); if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); else void media.requestFullscreen?.().catch(() => {}); }
     };
     // Capture before native video controls; otherwise one key can be handled twice.
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [next, previous, onSelect]);
+
+  useEffect(() => {
+    setTemporaryRate(false);
+    const media = video.current;
+    if (!media || unavailable) return;
+    const detach = attachTemporaryPlaybackRate(media, media, {
+      ignoreBottom: 56,
+      onChange: (active) => setTemporaryRate(active),
+    });
+    temporaryRateController.current = detach;
+    return () => {
+      detach();
+      if (temporaryRateController.current === detach) temporaryRateController.current = null;
+    };
+  }, [entry.id, entry.mediaUrl, unavailable]);
 
   const syncPlayback = (element: HTMLVideoElement) => {
     playback.current = { loaded: playback.current.loaded, position: element.currentTime, duration: element.duration };
@@ -185,6 +214,7 @@ export function LibraryPlayer({ entry, episodes, onSelect, onProgress, onRefresh
             if (entry.storage === 'external') void checkFile();
           }}
           aria-label={`${entry.title} ${entry.kind === 'tv' ? episodeLabel(entry) : ''}`} />}
+        {!unavailable && temporaryRate && <div role="status" className="playback-rate-hint">2×</div>}
         {unavailable ? <div className={styles.videoMessage} role="status"><LibraryIcon name="folder" /><p>{unavailableMessage}</p><button type="button" className={styles.secondaryButton} disabled={checkingFile} onClick={() => void checkFile()}>{checkingFile ? '检查中…' : '重新检查'}</button></div>
           : playError && <div className={styles.videoMessage} role="alert"><LibraryIcon name="film" /><p>{playError}</p><a href={downloadUrl} download className={styles.secondaryButton}>保存视频到设备</a></div>}
         {!unavailable && ended && next && <div className={styles.endedMessage}><p>本集已播放完</p><button className={styles.primaryButton} onClick={() => onSelect(next.id)}><LibraryIcon name="next" />播放下一集</button></div>}

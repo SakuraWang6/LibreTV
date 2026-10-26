@@ -15,6 +15,7 @@ import {
 import { loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
+import { attachTemporaryPlaybackRate } from '@/lib/temporary-playback-rate';
 import {
   findActiveSegment,
   findCrossedEnding,
@@ -542,6 +543,8 @@ export function PlayerShell({
       playsInline: true,
       airplay: true,
       hotkey: false,
+      gesture: false,
+      fastForward: false,
       theme: '#2563eb',
       lang: navigator.language.toLowerCase().startsWith('zh') ? 'zh-cn' : 'en',
       moreVideoAttr: { crossOrigin: 'anonymous', playsInline: true },
@@ -755,19 +758,32 @@ export function PlayerShell({
 
     // —— 键盘快捷键（旧版 hotkey:false + 自定义逻辑的移植） ——
     const shortcuts = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      // 输入框或按钮获得焦点时不劫持按键：否则空格会吞掉按钮的默认激活
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.closest('button')) return;
+      const target = e.target;
+      // Let focused controls and editable text keep their own keyboard behavior.
+      if (e.defaultPrevented || !(target instanceof Element)
+        || target.closest('input,textarea,select,button,[role="slider"],[contenteditable]:not([contenteditable="false"])')
+        || e.ctrlKey || e.metaKey) return;
       const current = artRef.current;
       if (!current) return;
       if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); return; } // 由父层处理集数切换
       if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); return; }
       switch (e.key) {
         case 'ArrowLeft':
-          if (current.currentTime > 5) { current.currentTime -= 5; showHint('快退 5s'); e.preventDefault(); }
+          e.preventDefault(); e.stopPropagation();
+          if (!e.repeat) {
+            detachTemporaryRate.endKeyboardHold();
+            current.currentTime = Math.max(0, current.currentTime - 5);
+            showHint('快退 5s');
+          }
           break;
         case 'ArrowRight':
-          if (current.duration - current.currentTime > 5) { current.currentTime += 5; showHint('快进 5s'); e.preventDefault(); }
+          e.preventDefault(); e.stopPropagation();
+          if (!e.repeat) {
+            current.currentTime = Number.isFinite(current.duration) && current.duration > 0
+              ? Math.min(current.duration, current.currentTime + 5) : current.currentTime + 5;
+            showHint('快进 5s');
+            detachTemporaryRate.beginKeyboardHold();
+          }
           break;
         case 'ArrowUp':
           if (current.volume < 1) { current.volume = Math.min(1, current.volume + 0.1); showHint(`音量 ${Math.round(current.volume * 100)}%`); e.preventDefault(); }
@@ -822,13 +838,13 @@ export function PlayerShell({
         }
       }
     };
-    document.addEventListener('keydown', shortcuts);
+    // Consume seek keys before a focused video's browser defaults can seek again.
+    document.addEventListener('keydown', shortcuts, true);
 
-    // —— 移动端长按 3 倍速 ——
-    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-    let isLongPress = false;
-    let originalRate = 1.0;
     const el = containerRef.current;
+    const detachTemporaryRate = attachTemporaryPlaybackRate(art.template.$player, art.video, {
+      onChange: (active, originalRate) => showHint(active ? '2 倍速' : `${originalRate} 倍速`),
+    });
 
     // 全屏时播放器覆盖整个视口，无法依赖 mouseleave 判断“移出播放器”。
     // 改为按鼠标活动计时：停止移动后快速收起控制栏，移动时立即显示。
@@ -854,39 +870,9 @@ export function PlayerShell({
       showControlsOnPointerMove();
     }
 
-    const onTouchStart = (e: TouchEvent) => {
-      if (art.video?.paused) return;
-      // 已有触控在处理时忽略新手指：否则第二指会把 originalRate 捕获成 3.0，
-      // 松手后倍速永久卡在 3x；旧定时器句柄也会被覆盖成无法清除的幽灵触发
-      if (isLongPress || longPressTimer) return;
-      // 控制栏 / 设置面板上的长按不触发倍速（按住进度条拖动、长按倍速菜单项会误触）
-      if ((e.target as HTMLElement).closest?.('.art-controls, .art-settings')) return;
-      originalRate = art.video.playbackRate;
-      longPressTimer = setTimeout(() => {
-        if (art.video?.paused) return;
-        art.video.playbackRate = 3.0;
-        isLongPress = true;
-        showHint('3 倍速');
-      }, 500);
-    };
-    const onTouchEnd = () => {
-      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-      if (isLongPress) {
-        art.video.playbackRate = originalRate;
-        isLongPress = false;
-        showHint(`${originalRate} 倍速`);
-      }
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      if (isLongPress) e.preventDefault();
-    };
     // ArtPlayer 的 contextmenu 组件只在桌面端初始化（移动端构造函数里跳过 init），
     // 长按倍速因而会连带呼出系统原生菜单/气泡。播放器表面没有可用的原生菜单，统一抑制
     const onContextMenu = (e: Event) => e.preventDefault();
-    el?.addEventListener('touchstart', onTouchStart, { passive: false });
-    el?.addEventListener('touchend', onTouchEnd);
-    el?.addEventListener('touchcancel', onTouchEnd);
-    el?.addEventListener('touchmove', onTouchMove, { passive: false });
     el?.addEventListener('contextmenu', onContextMenu);
 
     // 卸载与页面隐藏时保存进度
@@ -905,14 +891,11 @@ export function PlayerShell({
           propsRef.current.onPause?.(art.currentTime, art.duration);
         } catch { /* 忽略 */ }
       }
-      document.removeEventListener('keydown', shortcuts);
+      detachTemporaryRate();
+      document.removeEventListener('keydown', shortcuts, true);
       document.removeEventListener('visibilitychange', saveOnHide);
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
-      el?.removeEventListener('touchstart', onTouchStart);
-      el?.removeEventListener('touchend', onTouchEnd);
-      el?.removeEventListener('touchcancel', onTouchEnd);
-      el?.removeEventListener('touchmove', onTouchMove);
       el?.removeEventListener('contextmenu', onContextMenu);
       art.video?.removeEventListener('resize', reportVideoHeight);
       el?.removeEventListener('mousemove', showControlsOnPointerMove);
@@ -991,7 +974,7 @@ export function PlayerShell({
       {!error && skipPrompt && (
         <button
           type="button"
-          className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/70 px-4 py-2 text-sm text-white transition-colors hover:bg-black/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/70 px-4 py-2 text-sm text-white transition-colors hover:bg-black/90"
           onClick={() => {
             if (skipPrompt.type === 'ending') {
               finishBySkip(skipPrompt);
@@ -1030,7 +1013,7 @@ export function PlayerShell({
           {undoSkip && (
             <button
               type="button"
-              className="pointer-events-auto shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="pointer-events-auto shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-xs font-medium transition-colors hover:bg-white/30"
               onClick={undoLastSkip}
             >
               撤销

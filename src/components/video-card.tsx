@@ -27,7 +27,7 @@ function PosterCard({ title, cover, rating, metadata, onClick }: { title: string
   useEffect(() => setImgFailed(false), [cover, imageProxyMode, customImageProxy]);
 
   return <button type="button" onClick={onClick} aria-label={title}
-    className="group block min-w-0 w-full text-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-4 focus-visible:ring-offset-page">
+    className="group block min-w-0 w-full text-center rounded-lg">
     <span className="relative block aspect-[2/3] overflow-hidden rounded-lg bg-chip ring-1 ring-black/5 shadow-sm transition-shadow duration-200 group-hover:shadow-lg">
       {cover && !imgFailed ? <SmartImage url={cover} mode={imageProxyMode} customProxy={customImageProxy} alt={title}
         className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.025]" onExhausted={() => setImgFailed(true)} />
